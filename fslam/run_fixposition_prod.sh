@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
+source /opt/ros/foxy/setup.bash 
 set -euo pipefail
 
 DOCKER_IMAGE="${DOCKER_IMAGE:-wanderer123/fslam-humble:arm64}"
 DOCKER_MEM_LIMIT="${DOCKER_MEM_LIMIT:-8g}"
 DOCKER_MEM_SWAP="${DOCKER_MEM_SWAP:-10g}"
 CONTAINER_NAME="${CONTAINER_NAME:-fixposition-runtime}"
-LOG_DIR="${LOG_DIR:-/home/user/fslam_test/fslam/logs/fixposition_only}"
-FIXPOSITION_CONFIG_DIR="${FIXPOSITION_CONFIG_DIR:-/home/user/fslam_test/fixposition}"
-HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-/home/user/fslam_test/motion_info_to_twist.py}"
-FP_TO_ODOM_SCRIPT="${FP_TO_ODOM_SCRIPT:-/home/user/fslam_test/fp_to_odom.py}"
+LOG_DIR="${LOG_DIR:-/home/user/fslam/fslam/logs/fixposition_only}"
+FIXPOSITION_CONFIG_DIR="${FIXPOSITION_CONFIG_DIR:-/home/user/fslam/fixposition}"
+HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-/home/user/fslam/motion_info_to_twist.py}"
+FP_TO_ODOM_SCRIPT="${FP_TO_ODOM_SCRIPT:-/home/user/fslam/fp_to_odom.py}"
 ENABLE_MOTION_INFO_BRIDGE="${ENABLE_MOTION_INFO_BRIDGE:-1}"
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 HOST_BRIDGE_PID_FILE=""
@@ -157,7 +158,7 @@ docker run -d \
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID}" \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
   -e CYCLONEDDS_URI=/data/cyclonedds.xml \
-  -v /home/user/fslam_test/cyclonedds.xml:/data/cyclonedds.xml:ro \
+  -v /home/user/fslam/cyclonedds.xml:/data/cyclonedds.xml:ro \
   -v /dev:/dev \
   -v /dev/shm:/dev/shm \
   -v /etc/localtime:/etc/localtime:ro \
@@ -202,3 +203,4 @@ printf '%s\n' "${watcher_pid}" > "${HOST_BRIDGE_WATCHER_PID_FILE}"
 
 echo "[INFO] Container started: ${CONTAINER_NAME}"
 docker ps --filter "name=${CONTAINER_NAME}"
+wait
