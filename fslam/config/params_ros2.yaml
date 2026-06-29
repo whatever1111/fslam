@@ -1,0 +1,256 @@
+# ROS2 runtime parameters used by current C++ nodes.
+# ROS1/legacy/offline-analysis-only keys were moved out of this file.
+
+/**:
+  ros__parameters:
+    pointCloudTopic: /LIDAR/POINTS
+    livoxCustomTopic: /livox/points
+    imuTopic: /fp_imu
+    useFpaImu: true
+    # Nav2 convention: publish continuous odom->base_link as /odom.
+    # Internally, LIO-SLAM also uses `${odomTopic}_incremental` for deskew and initial guess.
+    odomTopic: /odom
+    gpsTopic: /odometry/gps
+    # Rotate GPS ENU axis to the algorithm's map/LiDAR axis convention (default: identity).
+    gpsExtrinsicRot: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    lidarFrame: lidar_link
+    baselinkFrame: base_link
+    odometryFrame: odom
+    mapFrame: map
+    publishOdomToLidarTf: false
+    publishMapToOdomTf: true
+
+    # Optional: reframe GNSS (gpsMapFrame) into the factor/optimization frame (mapFrame) via TF.
+    # This is useful when GPS messages are published in a global map frame and LIO runs in a local
+    # continuous frame (e.g., mapFrame==odom and an external node publishes map->odom).
+    gpsUseMapToOdomTf: false
+    gpsMapFrame: map
+    gpsTfTimeout: 0.2
+    gpsTfFallbackToLatest: true
+    gpsLatchMapToOdomTf: false
+
+    # TransformFusion (odom->base_link) uses the filtered incremental stream by default.
+    transformFusionLidarOdomTopic: lio_sam/mapping/odometry_incremental_filtered
+    # IMU preintegration correction should be the raw scan-to-map incremental stream.
+    # The filtered incremental stream is meant as a robust anchor for TransformFusion (/odom),
+    # but using it as the IMU graph correction can starve the estimator of real LiDAR constraints
+    # when scan2map is frequently gated.
+    imuPreintegrationLidarOdomTopic: lio_sam/mapping/odometry_incremental
+    transformFusionImuQueueSize: 30000
+    transformFusionLidarGapToRecoverSec: 1.0
+    transformFusionLidarRecoverDurationSec: 5.0
+    transformFusionLidarRecoverAlpha: 0.1
+
+    publishGpsFactorDebug: true
+    publishLidarConfidenceDebug: true
+    useImuHeadingInitialization: true
+    useGpsElevation: true
+    useGpsSensorCovariance: true
+    # Also add an orientation (yaw) prior from GNSS (ported from ros1_legacy).
+    useGpsOrientationCov: true
+    gpsYawOnly: true
+    gpsCovThreshold: 5.0
+    poseCovThreshold: 1.0
+    gpsPosStdFloor: 0.12
+    gpsOriStdFloorDeg: 4.0
+    gpsRobustKernel: none
+    gpsRobustDelta: 10.0
+    gpsTimeWindow: 0.1
+    gpsTimeSyncMode: latest_before
+    gpsInitWaitDist: 0.0
+    gpsAddInterval: 5.0
+    # Allow GPS factors on rotation-only keyframes (in-place turns), even when translation < gpsAddInterval*.
+    # 0 disables this angle bypass (legacy behavior).
+    gpsAddAngleIntervalDeg: 5.0
+    useGnssDegraded: true
+    gnssDegradedTopic: /gnss_degraded
+    gpsNoiseScaleGood: 0.6
+    gpsNoiseScaleDegraded: 5.0
+    gpsAddIntervalGood: 0.1
+    gpsAddIntervalDegraded: 0.6
+    disablePoseCovGateWhenGnssGood: true
+    skipGpsWhenGnssDegraded: true
+    gpsPreResidualSoftThresh: 0.0
+    gpsPreResidualHardThresh: 0.0
+    gpsPreResidualInflateMaxScale: 4.0
+    savePCD: false
+    savePCDDirectory: /Downloads/LOAM/
+    sensor: livox
+    N_SCAN: 16
+    Horizon_SCAN: 5000
+    downsampleRate: 1
+    lidarMinRange: 0.3
+    lidarMaxRange: 20.0
+    lidarTimeOffset: 0.0
+    imuAccNoise: 0.003993957088823881
+    imuGyrNoise: 0.0015636343949698187
+    imuAccBiasN: 6.435665935353257e-05
+    imuGyrBiasN: 3.564031869636761e-05
+    imuGravity: 9.80511
+    imuRPYWeight: 0.01
+    imuGapThreshold: 0.05
+    # LiDAR pose prior noise used in the IMU preintegration graph (sigmas).
+    # Order: [rot_x, rot_y, rot_z, pos_x, pos_y, pos_z] in [rad, rad, rad, m, m, m]
+    imuCorrectionNoise: [0.2, 0.2, 0.2, 0.3, 0.3, 0.3]
+    imuCorrectionNoiseDegenerate: [2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
+
+    # Adaptive IMU correction weighting: down-weight LiDAR pose prior in IMU graph
+    # when scan-to-map is unreliable (ported from ros1_legacy).
+    imuCorrectionAdaptiveWeighting: true
+    imuCorrectionDegenerateScale: 2.5
+    imuCorrectionAdaptiveMaxScale: 6.0
+    imuCorrectionConfidenceLowEnter: 0.60
+    imuCorrectionConfidenceLowExit: 0.85
+    imuCorrectionSoftPoseInnovation: 0.08
+    imuCorrectionHardPoseInnovation: 0.40
+    imuCorrectionSoftYawInnovationDeg: 1.0
+    imuCorrectionHardYawInnovationDeg: 6.0
+    imuCorrectionScaleLpfAlpha: 0.25
+    imuCorrectionRequireMapAdaptive: true
+    imuCorrectionMapScaleEnter: 1.20
+    imuCorrectionMapRiskEnter: 0.55
+    imuCorrectionExtremePoseInnovationScale: 2.5
+    imuCorrectionExtremeYawInnovationScale: 2.5
+    imuCorrectionMinActivationInterval: 0.80
+    imuCorrectionGateSoft: 0.10
+    imuCorrectionGateHard: 0.50
+    imuCorrectionGatePower: 2.0
+    extrinsicTrans:
+    - 0.0
+    - 0.0
+    - 0.0
+    extrinsicRot:
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    extrinsicRPY:
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    edgeThreshold: 0.1
+    surfThreshold: 0.1
+    edgeFeatureMinValidNum: 5
+    surfFeatureMinValidNum: 50
+    degenerateEigenThreshold: 12.0
+    scan2MapMaxIterations: 15
+    scan2MapConvergeDeltaRDeg: 0.1
+    scan2MapConvergeDeltaTCm: 0.5
+
+    # TransformFusion anchor protection: filtered incremental odometry stream.
+    # When scan-to-map is unreliable, mapOptimization blends scan2map increments toward IMU-preintegration
+    # increments, and publishes to /lio_sam/mapping/odometry_incremental_filtered.
+    incrementalOdomMaxVelXY: 1.6
+    incrementalOdomMaxYawRateDeg: 45.0
+    incrementalOdomRejectOnDegenerate: true
+    incrementalOdomRejectMinLidarConfidence: 0.0
+    incrementalOdomRejectMaxMatchRisk: 0.95
+    incrementalOdomMatchRiskMinWeight: 0.20
+    incrementalOdomRejectMaxInconsistencyRisk: 1.0
+    incrementalOdomRejectMaxNoiseScale: 0.0
+
+    lidarOdomAdaptiveWeighting: true
+    lidarOdomBaseRotVar: 7.6e-05
+    lidarOdomBasePosVar: 0.0025
+    lidarOdomDegenerateScale: 4.0
+    lidarOdomAdaptiveMaxScale: 8.0
+    lidarConfidenceEwmaAlpha: 0.2
+    lidarConfidenceResidualScale: 0.12
+    lidarConfidenceMinValidRatio: 0.08
+    lidarConfidenceMinGeomRatio: 0.05
+    lidarConfidenceValidRatioFull: 0.4
+    lidarConfidenceGeomRatioFull: 0.4
+    lidarConfidenceEigenSoft: 0.2
+    lidarConfidenceEigenFull: 2.0
+    lidarConfidenceConvergeRotDeg: 0.2
+    lidarConfidenceConvergeTransCm: 2.0
+    lidarConfidenceWeightResidual: 0.35
+    lidarConfidenceWeightEigen: 0.05
+    lidarConfidenceWeightSelected: 0.25
+    lidarConfidenceWeightGeom: 0.2
+    lidarConfidenceWeightConv: 0.15
+    lidarConfidenceLowEnter: 0.6
+    lidarConfidenceLowExit: 0.85
+    lidarOdomSoftInconsistencyPos: 0.1
+    lidarOdomHardInconsistencyPos: 0.45
+    lidarOdomSoftInconsistencyYawDeg: 1.5
+    lidarOdomHardInconsistencyYawDeg: 8.0
+    lidarOdomMatchQualitySoft: 0.45
+    lidarOdomMatchQualityHard: 0.85
+    lidarOdomScaleLpfAlpha: 0.25
+    lidarOdomScaleLpfAlphaRise: 0.35
+    lidarOdomScaleLpfAlphaFall: 0.08
+    lidarOdomScaleHysteresisEnter: 1.8
+    lidarOdomScaleHysteresisExit: 1.4
+    lidarOdomScaleHoldSec: 0.6
+    lidarOdomGateSoft: 0.1
+    lidarOdomGateHard: 0.5
+    lidarOdomGatePower: 2.0
+    lidarOdomUseGpsResidualRisk: true
+    lidarOdomGpsResidualSoftChi: 4.0
+    lidarOdomGpsResidualHardChi: 6.0
+    lidarOdomGpsResidualRiskLpfAlpha: 0.15
+    useLegOdom: false
+    legOdomTopic: /leg_odom
+    legTimeWindow: 0.05
+    legTimeSyncMode: latest_before
+    legNoisePos: [0.5, 0.5, 0.10]
+    legNoiseRotDeg: [1.0, 1.0, 2.0]
+    legNoisePosStatic: [0.001, 0.001, 0.002]
+    legNoiseRotStaticDeg: [0.3, 0.3, 0.6]
+    legStaticVelThresh: 0.02
+    legStaticAngVelThresh: 0.02
+    legStaticMinDuration: 0.2
+    legStaticPosThresh: 0.01
+    legStaticRotThreshDeg: 0.5
+    legForceZeroWhenStatic: true
+    legMaxQueueSize: 5000
+    legQueueTimeSec: 5.0
+    legStaleBaselineMaxGapSec: 0.0
+    odometrySurfLeafSize: 0.6
+    mappingCornerLeafSize: 0.4
+    mappingSurfLeafSize: 0.6
+    z_tollerance: 1000.0
+    rotation_tollerance: 1000.0
+    # Keep parity with ros1_legacy defaults: mapOptimization uses OpenMP in a few hot loops
+    # (e.g. point-cloud transforms). Too-low values can make offline replay drop frames and
+    # destabilize scan-to-map.
+    numberOfCores: 8
+    mappingProcessInterval: 0.0
+    surroundingkeyframeAddingDistThreshold: 0.9
+    surroundingkeyframeAddingAngleThreshold: 0.15
+    surroundingKeyframeDensity: 0.9
+    surroundingKeyframeSearchRadius: 30.0
+    loopClosureEnableFlag: true
+    loopClosureFrequency: 1.0
+    surroundingKeyframeSize: 50
+    historyKeyframeSearchRadius: 15.0
+    historyKeyframeSearchTimeDiff: 30.0
+    historyKeyframeSearchNum: 25
+    historyKeyframeFitnessScore: 0.3
+    loopClosureRegistrationBackend: FAST_VGICP
+    loopClosureRegistrationMaxIterations: 50
+    loopClosureVgicpNumThreads: 0
+    loopClosureVgicpCorrespondenceRandomness: 20
+    loopClosureVgicpVoxelResolution: 0.0
+    loopClosureScanContextEnable: true
+    scanContextNumRings: 20
+    scanContextNumSectors: 60
+    scanContextMaxRadius: 80.0
+    scanContextExcludeRecentNum: 30
+    scanContextNumCandidates: 10
+    scanContextDistThreshold: 0.15
+    globalMapVisualizationSearchRadius: 50.0
+    globalMapVisualizationPoseDensity: 0.3
+    globalMapVisualizationLeafSize: 0.2

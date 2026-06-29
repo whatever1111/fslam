@@ -1,0 +1,9 @@
+[INFO] [1777024369.604886434] [fixposition_odom_to_odom]: Relaying /Odometry (best_effort) -> /Odometry_pgo (reliable)
+[INFO] [1777024694.334788646] [fixposition_odom_to_odom]: First odometry message relayed
+[INFO] [1777024770.677548071] [fixposition_odom_to_odom]: Relayed 200 odometry messages
+[INFO] [1777024884.179676059] [fixposition_odom_to_odom]: Relayed 400 odometry messages
+[INFO] [1777024963.699673412] [fixposition_odom_to_odom]: Relayed 600 odometry messages
+[INFO] [1777025031.879739020] [fixposition_odom_to_odom]: Relayed 800 odometry messages
+[INFO] [1777025112.645128628] [fixposition_odom_to_odom]: Relayed 1000 odometry messages
+[INFO] [1777025181.311546643] [fixposition_odom_to_odom]: Relayed 1200 odometry messages
+[INFO] [1777025251.824075530] [fixposition_odom_to_odom]: Relayed 1400 odometry messages

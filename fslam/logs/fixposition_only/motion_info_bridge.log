@@ -1,0 +1,2 @@
+[INFO] [1782729438.462400561] [motion_info_to_twist]: Bridging /MOTION_INFO -> /fixposition/motion_info_twist
+[INFO] [1782729438.466917078] [motion_info_to_twist]: Published first Twist converted from MotionInfo

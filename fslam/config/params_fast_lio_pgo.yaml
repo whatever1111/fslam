@@ -1,0 +1,170 @@
+fast_lio_pgo:
+  ros__parameters:
+    # Keyframe selection
+    keyframe_dist_thresh: 1.0       # meters
+    keyframe_angle_thresh: 0.2      # radians
+
+    # GPS fusion
+    gps_topic: "/odometry_enu_synced"
+    use_gps: true
+    use_gps_elevation: true         # critical: constrains Z drift
+    gps_cov_threshold: 5.0         # reject GPS with variance above this
+    gps_add_interval: 0.5           # meters between GPS factors (was 2.0)
+    # Set to a finite value (degrees) to skip yaw alignment warmup.
+    # Use when the robot always starts facing a known direction (e.g. charging dock).
+    # Leave as NaN to auto-estimate from GPS displacement (needs ~2m travel).
+    initial_yaw_deg: .NaN
+    # Version A policy: late ready > wrong ready.
+    # GNSS heading is only used as a startup seed / validation signal for SVD.
+    # It must NOT directly mark the system ready.
+    use_gnss_heading: false
+    gnss_heading_min_travel: 0.3    # meters, minimum travel before GNSS heading can be used as seed/validation
+    # Lidar clock offset: seconds to add to GPS timestamps so they align with
+    # the lidar clock. Use when livox clock differs from system/GPS clock.
+    # E.g. if livox is 37.878s ahead of GPS, set to 37.878.
+    lidar_time_offset: 0.0
+
+    # Loop closure
+    loop_closure_enabled: true
+    loop_closure_frequency: 1.0     # Hz
+    scan_context_dist_threshold: 0.15
+    history_keyframe_fitness_score: 0.3
+    history_keyframe_search_radius: 15.0
+
+    # BetweenFactor noise (variance, not sigma)
+    # Based on measured FLIO increment accuracy: σ_xy=0.044m, σ_z=0.004m
+    between_noise_rot: 1.0e-3       # rotation: tight
+    between_noise_xy: 0.01          # XY: σ=0.1m, ~2.3x measured (was 0.5)
+    between_noise_z: 1.0e-3         # Z:  σ=0.032m, ~9x measured (was 1.0)
+
+    # Loop closure Hessian-based anisotropic noise model (Hinduja partial factor).
+    # Eigenvalues below this fraction of max eigenvalue are treated as unconstrained.
+    # Set to 0.0 to disable (use uniform variance for all DOF).
+    loop_hessian_eigenvalue_ratio: 0.0
+    # GPS variance floor (use max(reported_cov, floor))
+    # Floor < typical RTK cov (~0.005) so good GPS passes through at actual quality
+    gps_xy_var_floor: 1.0e-3        # σ=0.032m, trust good RTK (was 0.1)
+    gps_z_var_floor: 1.0e-3         # σ=0.032m, trust good RTK (was 0.01)
+
+    # Twist (wheel) odometry fusion
+    use_twist_odom: true
+    twist_topic: "/fixposition/motion_info_twist"
+    twist_noise_rot: 0.10            # rad/s base noise stddev (loose: soft constraint)
+    twist_noise_xy: 0.50             # m/s base noise stddev (loose: 10x odom between_noise)
+    twist_noise_z: 1.00              # m/s base noise stddev (loose: Z unconstrained)
+    # Extrinsic rotation: robot body frame → FLIO2 body frame (IMU frame).
+    # For mower: Livox IMU mounted at ~20° pitch relative to base_link.
+    # FLIO2 camera_init is gravity-aligned, so IMU body frame is Ry(20°) in camera_init.
+    # R_{IMU_body←robot} = Ry(-20°) = transpose of FLIO2 extrinsic_R.
+    # NOT Ry(+20°) — that gives wrong Z sign in conjugation.
+    # Identity if twist is already in IMU frame.
+    twist_extrinsic_rot: [1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0]
+
+    # Odometry covariance clamping
+    odom_cov_floor: 1.0e-2
+    odom_cov_ceiling: 1.0
+
+# ============================================================================
+# FastLioPgoImuPreint — IMU Preintegration
+# ============================================================================
+fast_lio_pgo_imu_preint:
+  ros__parameters:
+    imu_topic: "/fp_imu"
+    # Correction source for IMU preintegration:
+    #   "/Odometry"                = FLIO2 raw odom (~10Hz, continuous)
+    #   "/fast_lio_pgo/odometry"   = PGO-optimized odom (~5Hz, GPS-corrected)
+    # Using PGO output ensures IMU preint trajectory stays close to PGO,
+    # eliminating anchor jumps in TransformFusion. Trade-off: lower correction
+    # rate (5Hz vs 10Hz), slightly more IMU drift between corrections.
+    correction_odom_topic: "/Odometry"
+    
+    # IMU noise (match FAST-LIO2 config)
+    imu_acc_noise: 0.00399
+    imu_gyr_noise: 0.00156
+    imu_acc_bias_n: 6.44e-5
+    imu_gyr_bias_n: 3.56e-5
+    imu_gravity: 9.80511
+    # IMU acc scale: Livox (g-units) → 9.80511; FP IMU (m/s²) → 1.0
+    # 0 or omit = same as imu_gravity (backward compatible)
+    imu_acc_scale: 1.0
+
+    # IMU→body extrinsic rotation for IMU preintegration.
+    # FLIO2 /Odometry publishes in IMU frame (state_point.rot/pos = IMU pose),
+    # so IMU measurements are already in the same frame as corrections → identity.
+    # The FLIO2 online-estimated R_imu_lidar (20.15°) is used internally by FLIO2
+    # for LiDAR→IMU point projection, NOT needed here.
+    extrinsic_rot: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
+    
+    # PGO correction noise sigma [rot, rot, rot, pos, pos, pos]
+    correction_noise: [0.05, 0.05, 0.05, 0.1, 0.1, 0.1]
+    
+    # IMU gap detection threshold (seconds, <=0 disables)
+    imu_gap_threshold: 10.0
+    # Correction staleness: suppress IMU odom if correction source hasn't sent
+    # a correction within this many seconds (0 disables).
+    # With FLIO2 source at ~10Hz, ICP spikes up to 600ms → 1.0s avoids false triggers.
+    correction_stale_threshold: 1.0
+
+# ============================================================================
+# FastLioPgoTransformFusion — High-frequency TF fusion
+# ============================================================================
+fast_lio_pgo_fusion:
+  ros__parameters:
+    odom_frame: "odom"
+    base_frame: "base_link"
+    map_frame: "map"
+    publish_map_to_odom_tf: true
+
+    # high_rate_odom: true  = 200Hz fused (IMU preint + TransformFusion)
+    #                false = raw /Odometry main timeline; publish T_corr-corrected pose on every callback
+    high_rate_odom: false
+    pgo_odom_topic: "/fast_lio_pgo/odometry"
+    lidar_odom_topic: "/Odometry"  # use /fast_lio_pgo/imu_odom_incremental for high_rate_odom=true
+
+    # Relocalization integration
+    use_relocalization: false            # subscribe to /relocalization/result for map→odom
+
+    # Smoothing parameters
+    pgo_gap_to_recover_sec: 5.0         # trigger recovery if PGO gap > 5s
+    pgo_recover_duration_sec: 3.0       # (legacy, unused)
+    pgo_recover_alpha: 0.1              # (legacy, unused)
+
+    # Correction transform lowpass: T_corr = PGO × IMU⁻¹, fusedPose = T_corr × IMU
+    # Each PGO keyframe updates T_corr via lerp/slerp with time constant tau.
+    # Eliminates anchor-switching jumps while smoothly tracking PGO corrections.
+    pgo_smooth_tau: 0.2                 # seconds, lowpass time constant for T_corr update (0=snap)
+    pgo_snap_threshold: 1.0             # meters, output jump above this snaps T_corr (loop closure)
+
+    # Fused output velocity sanity check
+    max_fusion_speed: 5.0               # m/s, hold pose if fused output velocity exceeds this
+
+# ============================================================================
+# NdtRelocalization — NDT-based relocalization against prior PCD map (Scheme 3)
+# ============================================================================
+ndt_relocalization:
+  ros__parameters:
+    prior_map_pcd: ""                   # prior map PCD path, empty=disabled
+    map_voxel_size: 0.5                 # voxel size for prior map downsampling
+    scan_voxel_size: 0.2                # voxel size for merged scan downsampling
+    scan_window_size: 6                 # number of scans to accumulate before matching
+    min_scan_points: 800                # minimum points in merged scan to attempt matching
+    ndt_resolution: 1.0                 # NDT internal voxel resolution
+    ndt_step_size: 0.1                  # line search step size
+    ndt_trans_eps: 0.01                 # convergence epsilon
+    ndt_max_iter: 30                    # max iterations
+    fitness_score_thresh: 1.0           # reject if fitness > threshold
+    # initial_pose_guess: [0,0,0,0,0,0] # [x,y,z,roll°,pitch°,yaw°], uncomment to set
+    auto_match: true                    # auto-run when enough scans accumulated
+    publish_tf: false                   # broadcast map→camera_init TF
+    publish_aligned_cloud: false        # publish aligned point cloud
+
+# ============================================================================
+# FpImuRelay — Fixposition IMU bias-correction relay (only used with IMU_SOURCE=fp_imu)
+# ============================================================================
+fp_imu_relay:
+  ros__parameters:
+    time_offset: 0.0                    # use relay auto-sync for FP IMU and GPS odom

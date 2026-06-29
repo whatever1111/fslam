@@ -1,0 +1,2 @@
+[INFO] [1782714586.713625706] [fixposition_odom_to_odom]: Relaying /fixposition/odometry_enu (best_effort) -> /ODOM (reliable)
+[INFO] [1782714586.715435811] [fixposition_odom_to_odom]: Forcing child_frame_id to:  and covariance to 0
