@@ -46,6 +46,9 @@
 #   --param-overlay <f>  在线改参 overlay（最高优先级层）| highest-priority param overlay
 #   --foreground         前台运行（--rm，Ctrl-C 停；默认后台 -d --restart unless-stopped）
 #                        run attached (--rm); default detached with restart policy
+#   --check              对运行中的容器做链路体检（逐话题测频 + 关键日志签名），
+#                        第一个无数据的话题即断点 | health-check a RUNNING deployment:
+#                        per-topic rate probe + log signatures; first silent topic = the break
 # 环境 | env:
 #   LOG_DIR                     日志/数据目录（默认 ~/fslam/logs；须可跨重启持久，
 #                               容器 restart 会重读其中的 entrypoint）| must persist across reboots
@@ -75,6 +78,8 @@ ODOM_ALIAS="/ODOM"
 OVERLAY=""
 DETACH=1
 RUNNER_ARGS=""          # 透传给镜像内 run_prod_native.sh | passed through to the in-image runner
+LIDAR_TOPIC="${LIDAR_TOPIC:-/LIDAR/POINTS}"   # 雷达话题（体检用；驱动是狗自带服务）| for checks; driver is the dog's own service
+DO_CHECK=0
 HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-}"
 ENABLE_MOTION_INFO_BRIDGE="${ENABLE_MOTION_INFO_BRIDGE:-auto}"
 
@@ -95,7 +100,8 @@ while [[ $# -gt 0 ]]; do
     --bridge-port)    RUNNER_ARGS+=" --bridge-port $2"; shift 2 ;;
     --param-overlay)  OVERLAY="$2"; shift 2 ;;
     --foreground)     DETACH=0; shift ;;
-    -h|--help) sed -n '2,52p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --check)          DO_CHECK=1; shift ;;
+    -h|--help) sed -n '2,58p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "[ERROR] 未知参数 | unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -137,6 +143,45 @@ if [[ -z "${HOST_BRIDGE_SCRIPT}" ]]; then
 fi
 
 mkdir -p "${LOG_DIR}"; LOG_DIR="$(realpath "${LOG_DIR}")"
+
+# ============================================================================
+# --check：对运行中的部署做链路体检,不动容器 | health-check a RUNNING deployment
+# 顺数据流逐话题测频:第一个无数据的话题 = 断点。
+# Probe topic rates along the data flow: the FIRST silent topic is the break.
+# ============================================================================
+if [[ "${DO_CHECK}" == "1" ]]; then
+  if ! docker ps --format '{{.Names}}' | grep -qx "${NAME}"; then
+    echo "[ERROR] 容器未运行 | container not running: ${NAME}" >&2; exit 1
+  fi
+  echo "== 数据流体检(容器 ${NAME},每话题探测 4s)| data-flow check =="
+  docker exec -i "${NAME}" bash -s -- "${LIDAR_TOPIC}" "${ODOM_ALIAS:-/ODOM}" <<'EOFCHECK'
+source /opt/ros/humble/setup.bash >/dev/null 2>&1
+source /root/ros2_ws/install/setup.bash >/dev/null 2>&1
+for t in "$1" /fixposition/fpa/corrimu /fixposition/fpa/odomenu \
+         /lio/points /lio/imu /lio/gps_odom \
+         /Odometry /fast_lio_pgo/odometry /odom "$2"; do
+  printf '  %-32s ' "$t"
+  rate="$(timeout 4 ros2 topic hz "$t" 2>/dev/null | grep -m1 -oE 'average rate: [0-9.]+')"
+  echo "${rate:-无数据 | SILENT}"
+done
+EOFCHECK
+  echo ""
+  echo "== 关键日志签名 | log signatures (${LOG_DIR}) =="
+  grep -hE 'first imu cb|first lidar|first GPS cb|alignment transform|No Effective|xy_floor' \
+    "${LOG_DIR}/pipeline.log" 2>/dev/null | tail -6 || true
+  echo "-- fixposition.log 尾部 | tail --"
+  tail -5 "${LOG_DIR}/fixposition.log" 2>/dev/null || echo "  (无 | none)"
+  echo "-- odom_alias.log 尾部 | tail --"
+  tail -3 "${LOG_DIR}/odom_alias.log" 2>/dev/null || echo "  (无 | none)"
+  echo ""
+  echo "解读 | how to read:"
+  echo "  ${LIDAR_TOPIC} SILENT      → 雷达驱动(狗自带服务)没在跑,本脚本不启动它"
+  echo "  corrimu/odomenu SILENT     → FP 设备没出数据:查 fixposition.log(TCP/RTK/基站改正)"
+  echo "  /lio/* SILENT              → adapter 异常:查 pipeline.log"
+  echo "  /Odometry SILENT           → 前端未初始化(需点云+IMU 同时就绪)"
+  echo "  仅 /odom(及别名) SILENT    → PGO 尚未对齐:等 'alignment transform' 日志行(需 GPS 因子+移动)"
+  exit 0
+fi
 
 # 同名旧容器先清 | drop any pre-existing container with the same name
 docker ps -a --format '{{.Names}}' | grep -qx "${NAME}" && {
@@ -225,12 +270,26 @@ EOFLAUNCH
     sleep 1
   done
   if [[ "${fp_up}" == "1" ]]; then
-    echo "[INFO] RTK 输出就绪 | RTK streams up: /fixposition/fpa/{odomenu,rawimu,imubias}"
+    # 话题存在 ≠ 有数据在流:实收一条 IMU 才算真就绪。
+    # Topic presence ≠ data flowing: only a received IMU message counts as ready.
+    if timeout 5 ros2 topic echo --once /fixposition/fpa/corrimu >/dev/null 2>&1; then
+      echo "[INFO] RTK 输出就绪(实收数据)| RTK streams up (data verified): /fixposition/fpa/{corrimu,odomenu}"
+    else
+      echo "[WARN] FPA 话题存在但 corrimu 5s 无数据 —— FP 设备可能没在流(查 /data/fixposition.log)"
+      echo "[WARN] FPA topics exist but corrimu delivered nothing in 5s — device likely not streaming"
+    fi
   else
     echo "[WARN] 30s 内未见 /fixposition/fpa/odomenu（驱动仍在 respawn 重试，管线继续启动）"
     echo "[WARN] no /fixposition/fpa/odomenu within 30s (driver keeps respawning; continuing)"
     echo "[WARN] 查 | check: /data/fixposition.log（stream 地址? RTK 天线/基站?）"
   fi
+fi
+
+# 雷达是狗自带服务,本脚本不启动 —— 缺席只能告警。
+# The LiDAR driver is the dog's own service, never started here — absence is warn-only.
+if ! timeout 5 ros2 topic list 2>/dev/null | grep -qx "${LIDAR_TOPIC:-/LIDAR/POINTS}"; then
+  echo "[WARN] 未发现雷达话题 ${LIDAR_TOPIC:-/LIDAR/POINTS} —— 确认狗上的雷达驱动服务在运行"
+  echo "[WARN] lidar topic missing — make sure the dog's own lidar driver service is running"
 fi
 
 # ---- 可选 /odom → 别名中继（狗导航栈消费 /ODOM）| optional /odom alias relay ----
@@ -293,6 +352,7 @@ DOCKER_ARGS=(
   -e START_FIXPOSITION="${START_FIXPOSITION}"
   -e FP_STREAM="${FP_STREAM}"
   -e ODOM_ALIAS="${ODOM_ALIAS}"
+  -e LIDAR_TOPIC="${LIDAR_TOPIC}"
   -e RUNNER_ARGS="${RUNNER_ARGS}"
   -v /dev:/dev
   -v /dev/shm:/dev/shm
