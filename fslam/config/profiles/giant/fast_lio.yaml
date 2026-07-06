@@ -1,0 +1,19 @@
+# ============================================================================
+# profiles/giant/fast_lio.yaml —— 前端物理传感器层 | front-end physical-sensor layer
+# ============================================================================
+# 来源：third_party/FAST_LIO/config/giant.yaml（RoboSense，经 rs_to_velodyne relay）。
+# Source: giant.yaml (RoboSense via the rs_to_velodyne relay). lidar_type→2 / timestamp_unit→0 由 base 固定.
+# ============================================================================
+
+/**:
+    ros__parameters:
+        preprocess:
+            scan_line: 5               # giant.yaml 标定值 | giant.yaml calibrated value
+            blind: 0.5                 # m
+        mapping:
+            det_range: 60.0            # m
+            extrinsic_est_en: true     # 在线精修（首轮调参推荐）| online-refine (recommended for first-pass tuning)
+            extrinsic_T: [-0.000083, 1.367967, 0.950319]
+            extrinsic_R: [-0.014289, -0.999660,  0.021795,
+                           0.974220, -0.009010,  0.225422,
+                          -0.225149,  0.024454,  0.974017]

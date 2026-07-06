@@ -1,0 +1,85 @@
+# ============================================================================
+# profiles/giant_allpoint/fast_lio.yaml —— 前端物理传感器层 | front-end physical-sensor layer
+# ============================================================================
+# 只覆盖 fast_lio.base.yaml 中的物理传感器项。深合并由 launch 完成。
+# Overrides ONLY the physical-sensor items of fast_lio.base.yaml. Deep-merged by the launch.
+#
+# 来源：third_party/FAST_LIO/config/giant_allpoint.yaml（与已验证的
+# fast_lio_canonical_giant.yaml 数值一致）。 Source: giant_allpoint.yaml (same values as the
+# validated fast_lio_canonical_giant.yaml).
+# ============================================================================
+
+/**:
+    ros__parameters:
+        preprocess:
+            scan_line: 32              # RoboSense 32 线 | RoboSense 32 rings
+            blind: 0.5                 # m
+        mapping:
+            det_range: 60.0            # m
+            # 2026-07-04：在线估计改为开启。旧的锁死理由（"yaw 漂 +22° 不收敛"）已证伪——那是
+            # 180° 反向初值的伪影；yaw 修正后初值近真，在线估计成为吸收本 rig 偏置↔重力↔倾斜
+            # 不可观测模态的自适应松弛（估计值本身不收敛为常数，勿当标定读数）。三包 A/B：
+            # 0626 mean 0.353→0.306 / 1523 0.403→0.326 / 0702(困难包) 70.3→0.343（冻结外参在
+            # 0702 有一次 -58m 前端 Z-runaway 插曲，在线估计全程幸存 max 9.1m）。
+            # 2026-07-04: online estimation now ON. The old lock rationale ("+22° yaw drift,
+            # non-converging") is falsified — it was an artifact of the 180°-flipped init. With the
+            # yaw fix the init is near-true and online estimation acts as adaptive slack absorbing
+            # this rig's bias↔gravity↔tilt unobservable modes (estimates do NOT converge to
+            # constants — never read them back as calibration). 3-bag A/B: 0626 mean 0.353→0.306 /
+            # 1523 0.403→0.326 / 0702 (hard bag) 70.3→0.343 (frozen extrinsic had a -58m front-end
+            # Z-runaway episode there; online survived the whole bag, max 9.1m).
+            extrinsic_est_en: true
+            # 雷达↔IMU 杆臂（baselink 帧点云 + FP body 帧 IMU）| LiDAR↔IMU lever (baselink-frame cloud + FP-body-frame IMU)
+            # 2026-07-06：修正 14m 级约定错误。旧值 [−0.239, 8.832, 3.093] 是"IMU 在 baselink 帧的位置"
+            # （厂商约定），当 FAST-LIO 的"云原点在 IMU 帧"用几何上不可能：原始点云地面在云帧 z≈−0.47
+            # （云原点离地 0.5m），旧值把 IMU 放到地下 2.6m。正确值 = −R·V（差一个求逆）→ IMU 离地
+            # 3.4m、位于 baselink 前方 8.8m（大机器、桅杆在前端）。错杆臂的动态项（转弯 ω×14m ≈ 数 m/s
+            # 速度错配）曾把 ba 泵到 2–3 m/s²、姿态错 5–18°、经 v·sinθ 泄漏成 −60m Z 俯冲，并制造了
+            # "0.3m heading-locked 残差 / FE 横向呼吸 / est_en 不收敛 / 跑间方差"全套衍生病。A/B：
+            # 0702 /odom mean 0.343→0.061 max 9.1→0.54；0626 mean 0.306→0.022 max 1.77→0.12；
+            # FE raw 2D 7-13m→2.5/0.28m；启动姿态误差 −5.1°→+0.1°。修正后 FE 与 GPS(POI) 重合 0.06m
+            # ⇒ POI 即物理 IMU 点，"9m 桅杆杆臂"叙事作废。
+            # 2026-07-06: fixed a 14 m CONVENTION error. The old value was the IMU position in the
+            # baselink frame (vendor convention); used as FAST-LIO's cloud-origin-in-IMU it is
+            # geometrically impossible (raw-cloud ground sits at z=-0.47 -> old T puts the IMU 2.6 m
+            # UNDERGROUND). Correct value = -R*V (one inversion) -> IMU 3.4 m above ground, 8.8 m ahead
+            # of baselink (big machine, mast at the front). The wrong lever's DYNAMIC term (omega x 14 m
+            # = several m/s of velocity misprediction in turns) pumped ba to 2-3 m/s^2, bent attitude
+            # 5-18deg, and leaked v*sin(theta) into the -60 m Z dive; it also manufactured the 0.3 m
+            # heading-locked residual, the lateral breathing, est_en "non-convergence", and the
+            # run-to-run variance. A/B: 0702 /odom mean 0.343->0.061 max 9.1->0.54; 0626 mean
+            # 0.306->0.022 max 1.77->0.12; FE raw 2D 7-13m -> 2.5/0.28m; startup attitude error
+            # -5.1deg -> +0.1deg. Post-fix the FE coincides with GPS(POI) to 0.06 m => POI IS the
+            # physical IMU point; the "9 m mast lever" story is dead.
+            extrinsic_T: [-8.887630, -0.179893, -2.934305]
+            # 2026-07-03：yaw 修正 180°（旧值 +90.14° 与实测反向）。证据三重闭合：点云系前进方向 +91°
+            # （厂商 pose course−yaw ×3 窗口）× rawimu 加计起步矢量前向 +1.5° × FE 内部速度方向 −178.9°
+            # = 91+90.14 精确自洽 ⇒ 真值 ≈ −89.7°。修复 = 旧 R 前两列取反（保留 roll/pitch 标定）。
+            # A/B（0626/1515/1523）：FE Z RMS 4.93→1.23m、in-run yaw 漂移 −4.5°→±0.1°、final 0.526→0.009。
+            # 勿用停车原始加计矢量重标倾斜（体固定加计偏置≈1.9°会污染，实测 TRIAD 解 Z 爆 18m）。
+            # 2026-07-03: yaw corrected by 180° (old +90.14° was anti-parallel to reality). Triple-closed
+            # evidence: travel dir in cloud frame +91° (vendor pose course−yaw ×3) × rawimu launch-accel
+            # forward +1.5° × FE-internal travel-in-IMU −178.9° = 91+90.14 exactly ⇒ true ≈ −89.7°.
+            # Fix = negate first two COLUMNS of the old R (keeps roll/pitch calib). A/B on 3 bags:
+            # FE Z RMS 4.93→1.23m, in-run yaw drift −4.5°→±0.1°, final 0.526→0.009. Do NOT recalibrate
+            # tilt from raw parked accel (body-fixed accel bias ≈1.9° corrupts it; TRIAD attempt blew Z to 18m).
+            # 2026-07-05：整矩阵改为包内直接恢复的真值 R_ext = R_fp_att⁻¹·R_vendor_pose（厂商 pose 与
+            # FP odomenu 同以 ENU 为参考）：0702 包 183 采样 p95 离散 0.046°、0626 包 0.019°、跨包一致
+            # 0.006°（常数性同时证明两 ENU 朝向重合）。对照上方翻转值：yaw 差 0.28°，tilt 幅值同为 1.27°
+            # 但方向差 90°（右乘 Rz(π) 不动 z 列，而原 roll/pitch 标在未翻转 yaw 约定下）→ 翻转值等效
+            # roll/pitch 误差 ~1.8°。eval(est_en) A/B 中性偏好（0626 全等；0702 mean 0.83→0.56 但该包方差
+            # 大）；关键收益在 prod base_link 模式：激活的杆臂旋转 1.8°×9.36m=29cm 固定误差被消除。
+            # 2026-07-05: matrix replaced with the bag-recovered TRUE value R_ext = R_fp_att^-1 *
+            # R_vendor_pose (vendor pose and FP odomenu share the ENU reference): 183 samples on 0702
+            # (p95 spread 0.046°), 0.019° on 0626, cross-bag consistency 0.006° (constancy also proves
+            # the two ENU orientations coincide). vs the flipped value above: yaw off 0.28°, tilt
+            # magnitude identical (1.27°) but direction off 90° (right-multiplying Rz(pi) leaves the
+            # z-column untouched while the original roll/pitch was calibrated in the pre-flip yaw
+            # convention) -> the flipped value carried ~1.8° effective roll/pitch error. eval (est_en)
+            # A/B neutral-to-better (0626 identical; 0702 mean 0.83->0.56, high-variance bag); the hard
+            # win is prod base_link mode, where the ACTIVE lever rotation had 1.8° x 9.36m = 29cm error.
+            # 与 pgo.yaml 的 base_link_lever_rotation / gps_to_base_link_* 必须同步（同一矩阵的拷贝/逆）。
+            # Must stay in sync with pgo.yaml base_link_lever_rotation / gps_to_base_link_* (copy/inverse of this).
+            extrinsic_R: [-0.002439,  0.999832,  0.018160,
+                          -0.999916, -0.002207, -0.012775,
+                          -0.012733, -0.018190,  0.999753]

@@ -1,0 +1,76 @@
+# ============================================================================
+# config/fixposition/m20.yaml —— Fixposition VRTK 驱动配置（云深处 M20）
+# Fixposition VRTK driver config (Deep Robotics M20 dog)
+# ============================================================================
+# 随 config/ 一起烘进 CI/CD 镜像（Dockerfile 拷到 share/lio_slam/config/），由
+# tools/run_fast_lio_pgo_prod.sh 在容器内先于 SLAM 管线启动驱动，开启 RTK/FPA 输出。
+# Baked into the CI/CD image with config/ (Dockerfile copies it into
+# share/lio_slam/config/); tools/run_fast_lio_pgo_prod.sh launches the driver
+# BEFORE the SLAM pipeline to bring up the RTK/FPA streams.
+#
+# 来源 | source: fslam 部署仓库 (whatever1111/fslam) fixposition/config.yaml。
+# stream 为设备网段专属 —— 运行时可用 FP_STREAM 环境变量覆盖（脚本 sed 写入副本）。
+# The stream URI is rig-specific — override at runtime via FP_STREAM (the launcher
+# rewrites a writable copy).
+#
+# profiles/m20 消费的关键输出 | key outputs consumed by profiles/m20:
+#   FP_A-RAWIMU + FP_A-IMUBIAS → /fixposition/fpa/{rawimu,imubias} → imu_adapter
+#   FP_A-ODOMENU               → /fixposition/fpa/odomenu          → odom_adapter
+# ============================================================================
+/**:
+    ros__parameters:
+        stream: tcpcli://10.21.31.66:21000
+        reconnect_delay: 5.0
+        delay_warning: 0.03
+
+        messages:
+            - "FP_A-ODOMETRY"
+            - "FP_A-ODOMENU"
+            - "FP_A-ODOMSH"
+            - "FP_A-ODOMSTATUS"
+            - "FP_A-IMUBIAS"
+            - "FP_A-EOE"
+            - "FP_A-TF"
+            - "FP_A-RAWIMU"
+            - "FP_A-CORRIMU"
+            - "FP_A-LLH"
+            - "NOV_B-INSPVAX"
+            - "FP_A-TEXT"
+            - "FP_A-GNSSANT"
+            - "FP_A-GNSSCORR"
+            - "FP_A-TP"
+            - "GGA"
+            - "GLL"
+            - "GSA"
+            - "GST"
+            - "GSV"
+            - "HDT"
+            - "RMC"
+            - "VTG"
+            - "ZDA"
+            - "NOV_B-BESTGNSSPOS"
+
+        fusion_epoch: true
+        nmea_epoch: "GNSS"
+        raw_output: false
+        cov_warning: false
+        nav2_mode: false
+
+        # 狗端轮速：宿主机 motion_info_to_twist.py 桥出 /fixposition/motion_info_twist，
+        # 驱动转发给 FP 设备做内部融合（与 SLAM 管线的 /lio/twist 无关）。
+        # Dog wheel speed: the host-side motion_info_to_twist.py bridge publishes
+        # /fixposition/motion_info_twist; the driver feeds it to the FP device's internal
+        # fusion (independent of the SLAM pipeline's /lio/twist).
+        converter:
+            enabled: true
+            topic_type: "Twist"
+            input_topic: "/fixposition/motion_info_twist"
+            scale_factor: 1000.0
+            use_x: true
+            use_y: false
+            use_z: false
+
+        output_ns: "/fixposition"
+        speed_topic: ""
+        corr_topic: "/rtcm"
+        qos_type: "sensor_short"

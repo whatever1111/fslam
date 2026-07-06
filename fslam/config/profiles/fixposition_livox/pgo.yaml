@@ -1,0 +1,29 @@
+# ============================================================================
+# profiles/fixposition_livox/pgo.yaml —— 部署调整层 | deployment-tuning layer
+# ============================================================================
+# Fixposition GNSS/INS IMU + Livox LiDAR 平台（FP IMU 与 GPS 同钟，Livox 雷达另一时钟；
+# IMU 约 20° 俯仰安装）。来源：config/params_fast_lio_pgo.yaml 的部署增量。
+# Fixposition GNSS/INS IMU + Livox LiDAR rig (FP IMU shares the GPS clock, Livox LiDAR on a
+# separate clock; IMU mounted at ~20° pitch). Source: deltas of config/params_fast_lio_pgo.yaml.
+#   --params-file pgo.base.yaml --params-file profiles/fixposition_livox/pgo.yaml
+# ============================================================================
+
+fast_lio_pgo:
+  ros__parameters:
+    # Livox 雷达时钟比 FP IMU/GPS 超前 ~37s（实测）→ 平移 GPS 时间戳对齐雷达钟。
+    # Livox LiDAR clock leads FP IMU/GPS by ~37s (measured) → shift GPS timestamps onto the LiDAR clock.
+    lidar_time_offset: 37.0
+
+    # 有 Fixposition 轮速编码器 /fixposition/speed → 开启轮速融合。
+    # Fixposition wheel encoder /fixposition/speed present → enable wheel fusion.
+    use_twist_odom: true
+    # 该平台 Livox IMU 约 20° 俯仰安装（相对 base_link）。R_{IMU_body←robot}=Ry(-20°)，
+    # 即 FLIO2 extrinsic_R 的转置。 This rig's Livox IMU is mounted at ~20° pitch vs base_link;
+    # R_{IMU_body←robot}=Ry(-20°), the transpose of FLIO2's extrinsic_R.
+    twist_extrinsic_rot: [0.9393, 0.0, -0.3432,
+                          0.0,    1.0,  0.0,
+                          0.3432, 0.0,  0.9393]
+
+fast_lio_pgo_fusion:
+  ros__parameters:
+    base_frame: "autocube_link"     # 该车 base_link 命名 | this vehicle's base_link name

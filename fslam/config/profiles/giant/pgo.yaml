@@ -1,0 +1,33 @@
+# ============================================================================
+# profiles/giant/pgo.yaml —— 部署调整层 | deployment-tuning layer
+# ============================================================================
+# Giant(大块头) 仓库数据 —— RoboSense /rsm1_1 雷达 + CHCNAV CGI-610(DKT GPCHC) IMU/GNSS。
+# 与 giant_allpoint 是【同一台车】，但传感器走 dkt_robosense 适配器（RoboSense PC2 + GPCHC）。
+# 来源：run_giant_pgo_docker.sh（params_fast_lio_pgo.yaml + dkt 话题改写 + giant.yaml 前端）。
+# Giant warehouse data — RoboSense /rsm1_1 LiDAR + CHCNAV CGI-610 (DKT GPCHC) IMU/GNSS.
+# Same physical vehicle as giant_allpoint, but sensors flow through the dkt_robosense adapters.
+# Source: run_giant_pgo_docker.sh (params_fast_lio_pgo.yaml + dkt topic rewrite + giant.yaml front-end).
+#   --params-file pgo.base.yaml --params-file profiles/giant/pgo.yaml
+# ============================================================================
+
+fast_lio_pgo:
+  ros__parameters:
+    # DKT GPCHC relay 把 IMU/GNSS 输出在一致时钟；RoboSense 与之关系假设同钟 → 0。
+    # ⚠ TODO: 用仓库 bag 验证 RoboSense↔DKT 钟差（若有偏移在此覆盖）。
+    # The DKT GPCHC relay emits IMU/GNSS on one clock; RoboSense is assumed synced → 0.
+    # ⚠ TODO: verify the RoboSense↔DKT clock offset on a warehouse bag (override here if any).
+    lidar_time_offset: 0.0
+    # 仓库车实测顶速 ~5.8 m/s，融合速度上限随之放宽（见 fusion 段）。
+    # Warehouse vehicle tops ~5.8 m/s; the fusion speed cap is raised accordingly (see fusion section).
+
+fast_lio_pgo_fusion:
+  ros__parameters:
+    base_frame: "autocube_link"     # 该车 base_link 命名 | this vehicle's base_link name
+    max_fusion_speed: 12.0          # m/s，仓库车顶速 ~5.8，旧 5.0 会误触发 | warehouse top speed ~5.8, old 5.0 false-fired
+
+    # ⚠ 与 giant_allpoint 同为 9m 桅杆顶传感器。若需 base_link 高速输出，需把杆臂/
+    #   gps_to_base_link 按 RoboSense(rsm1_1) 雷达帧重算后移植到此处（allpoint 的值对应
+    #   baselink-decoded 点云帧，不能直接复用）。当前默认 sensor-frame 输出。
+    # ⚠ Same 9m-mast sensor rig as giant_allpoint. For high-rate base_link output, port the lever /
+    #   gps_to_base_link recomputed in the RoboSense (rsm1_1) LiDAR frame (allpoint's values are in the
+    #   baselink-decoded cloud frame and are NOT directly reusable). Defaults to sensor-frame output for now.

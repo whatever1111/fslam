@@ -1,0 +1,405 @@
+# ============================================================================
+# pgo.base.yaml —— PGO / 融合 / NDT「算法常量层」 | PGO / fusion / NDT "algorithm-constant layer"
+# ============================================================================
+# 全部署共享的算法基线，按 canonical 适配器链设计。
+# Shared algorithm baseline for all deployments, designed for the canonical adapter chain.
+#
+#   • 输入话题固定为 /lio/*（input_adapters 已归一化），与厂商无关，勿改。
+#     Input topics are fixed to /lio/* (normalized by input_adapters); vendor-agnostic, do not edit.
+#   • 这里是【算法行为常量 + 防发散护栏】，改它们=改算法调参，须配套 bag 回放验证。
+#     These are algorithm constants + anti-divergence guards; changing them = algorithm tuning,
+#     and must be re-validated by bag replay.
+#   • 这套成熟特性（退化RTK / 回环护栏 / FIX恢复 / CPU预算）原分散在 demo/xsw 变体，
+#     现统一提升为 base 默认，使每个部署都受保护。
+#     This matured feature set (degraded-RTK / loop guards / FIX recovery / CPU budget) was
+#     previously scattered across the demo/xsw variants; it is now promoted into the base so
+#     every deployment is protected.
+#
+# 三层加载顺序（后者逐键覆盖前者） | Three-layer load order (later overrides earlier):
+#   --params-file pgo.base.yaml \              # ① 算法常量 | algorithm constants (this file)
+#   --params-file profiles/<profile>/pgo.yaml \# ② 传感器/平台部署值 | sensor/platform deployment values
+#   --params-file modes/<mode>.yaml            # ③ 模式 | mode: 在线生产=prod / 离线评估=不加载 (prod / eval=none)
+#
+# 注意：base 为【部署中性】——所有部署相关键给中性默认，由 overlay 显式覆盖。
+# Note: the base is DEPLOYMENT-NEUTRAL — every deployment-specific key has a neutral default,
+# overridden explicitly in the overlays.
+# ============================================================================
+
+fast_lio_pgo:
+  ros__parameters:
+    # ------------------------------------------------------------------------
+    # canonical 输入话题（固定，勿改） | canonical input topics (fixed, do not edit)
+    # ------------------------------------------------------------------------
+    gps_topic: "/lio/gps_odom"      # odom_adapter 归一化的 ENU 里程计 | ENU odom from odom_adapter
+    twist_topic: "/lio/twist"       # twist_adapter 归一化的速度 | speed from twist_adapter
+
+    # ------------------------------------------------------------------------
+    # 关键帧选取 | keyframe selection
+    # ------------------------------------------------------------------------
+    keyframe_dist_thresh: 1.0       # m，距离阈值 | distance threshold
+    keyframe_angle_thresh: 0.2      # rad，角度阈值 | angle threshold
+    # 停车时按时间生成关键帧，保持 GPS 因子流动，便于停后重收敛的 FIX 拉回图。
+    # Time-based keyframes while parked: keeps GPS factors flowing so post-stop reconverged FIX pulls the graph back.
+    keyframe_time_thresh: 2.0       # s
+
+    # ------------------------------------------------------------------------
+    # GPS 融合（基础） | GPS fusion (basic)
+    # ------------------------------------------------------------------------
+    use_gps: true
+    use_gps_elevation: true         # 关键：约束 Z 漂移 | critical: constrains Z drift
+    gps_cov_threshold: 5.0          # 方差超此值直接拒收 | reject GPS with variance above this
+    gps_add_interval: 0.5           # m，相邻 GPS 因子间距 | meters between GPS factors
+
+    # ---- 退化 RTK 处理（cov 驱动，protective 默认 ON） ----
+    # ---- Degraded-RTK handling (covariance-driven, protective default ON) ----
+    # float 误差是缓变偏置而非白噪声 → 稀疏化因子到一个相关长度一个，并放大上报方差，
+    # 让里程计链主导。canonical 链下 odom_adapter 已用 trusted/degraded std 标注协方差，
+    # 本段据此协方差工作（无需读 FP 原始状态）。
+    # Float error is a slowly-varying bias, not white noise → thin factors to ~one per correlation
+    # length and inflate reported variance so the odometry chain dominates. Under the canonical chain
+    # the odom_adapter already tags covariance via trusted/degraded std; this section works off that
+    # covariance (no raw FP status needed).
+    gps_degraded_handling_enable: true
+    gps_degraded_cov_threshold: 0.25
+    gps_add_interval_degraded: 10.0
+    gps_var_scale_degraded: 10.0
+    gps_degraded_max_residual: 3.0  # 信任域：残差超此则回退全权重 GPS（前端退化场景兜底）| trust region
+    gps_add_max_wait_sec: 2.0       # 停车时距离门的时间旁路 | stationary bypass for the distance gate
+
+    # ---- RTK 重收敛滑移闸（P0-2） | RTK reconvergence slide gate ----
+    # GPS 位置在滑移而 INS twist 报告近零运动 → 样本处于滑移中途，跳过。
+    # GPS position sweeping while INS twist reports ~zero motion → samples are mid-slide, skip them.
+    gps_slide_gate_enable: true
+    gps_slide_window_sec: 0.5
+    gps_slide_min_pos_speed: 0.15
+    gps_slide_min_excess_speed: 0.25
+
+    # ---- 降级重收敛尾段：创新率自适应膨胀 | innovation-rate adaptive inflation ----
+    # 动机：浮点解临近重固定时以 ~0.1 m/s 冲回真值，固定降级权重拖着位姿追
+    # （0514 包实测定点时刻落后 1.4-3.0m）。创新率超阈值时按 (rate/阈值)² 追加放大方差。
+    # A/B 结论（2026-07-02，4 包 hesai_fp）：REJECTED，保持默认关。创新率无法区分
+    # "GNSS 冲回真值"与"前端漂走"（innovation=GNSS−估计，两者都抬升变化率）；实测触发
+    # rate 0.06-0.11 m/s 远大于真实浮点滑移(~0.01-0.03)，即触发主要来自前端漂移分量 →
+    # 膨胀恰在前端最需要约束时放松 GPS：1410 e1 pull 1.98→4.52m，4 包全程 mean 全部恶化。
+    # 若要复活此路线需第三方辨别信号（前端退化度指标 / FP native σ 收敛趋势）。
+    # Motivation: a re-converging float races back at ~0.1 m/s and the fixed degraded weight drags
+    # the pose after it (1.4-3.0m behind at fix on the 0514 bags). A/B (2026-07-02, 4 hesai_fp
+    # bags): REJECTED, keep off. The innovation rate cannot distinguish "GNSS racing to truth"
+    # from "front-end drifting away" — both raise it; measured triggers (0.06-0.11 m/s) far exceed
+    # the true float slide (~0.01-0.03), i.e. mostly front-end drift → the inflation loosened GPS
+    # exactly when the front-end needed containment (1410 e1 pull 1.98→4.52m; every mean worse).
+    # Reviving this needs a third discriminating signal (front-end degeneracy / native-σ trend).
+    gps_innov_inflate_enable: false
+    gps_innov_rate_threshold: 0.05    # m/s
+    gps_innov_max_scale: 100.0        # 方差放大上限（σ×10）| variance cap
+    gps_innov_max_sample_dt: 15.0     # s；相邻降级因子间隔超此则重置 | reset if factor gap exceeds this
+
+    # ---- 降级重收敛尾段：native σ 收敛趋势门 | native-σ convergence-trend gate ----
+    # 动机：重固定前的浮点段 FP σ 渐进下降（2.2→0.6m），以此识别尾段并按 native σ 定权+恢复
+    # 正常因子间隔。A/B 结论（2026-07-02，4 包 hesai_fp）：REJECTED，保持默认关。两个失败模式：
+    # (1) 结构性检测不到——5 事件中 3 个 σ 直到定点前 1-3s 才跌破天花板（0509 停在 1.9），而
+    # 降级因子间隔 ~7s，可检测窗口比因子节奏短，门开不了；(2) 触发时语义错误——σ 下降标志 FP
+    # 滤波器【内部】收敛，不是向真值收敛：1410 e1 浮点收敛到离真值 3.2m 的有偏平台且 σ 报
+    # 1.1-1.25（低报 ×2.6），门按 σ1.25 收紧把位姿拉上平台 → pull 1.98→3.36m。与 native-cov
+    # 全程直通被否决同病根（降级段 INS 低报自身误差）。该类事件定点瞬间才跳回真值（rtk_jump），
+    # 不存在可跟踪的渐进回归——pull≈平台偏差，GNSS 内部信号不可消；剩余路径=前端独立约束（轮速+NHC）。
+    # Motivation: weight tail factors by the declining native σ. A/B (2026-07-02) REJECTED: (1) on
+    # 3/5 events σ crossed the ceiling only 1-3s before the fix while degraded factors are ~7s
+    # apart — structurally undetectable; (2) when it did fire (1410 e1), the σ decline signalled
+    # the FP filter's INTERNAL convergence onto a 3.2m-biased plateau (σ said 1.1-1.25, ×2.6
+    # under-report) — tightening onto it made the pull WORSE, 1.98→3.36m. Same root cause as the
+    # rejected always-native covariance: the INS under-reports its own error while degraded. Such
+    # events snap to truth only AT the fix (rtk_jump) — there is no gradual return to track.
+    gps_native_trend_enable: false
+    gps_native_trend_window_sec: 5.0      # 趋势回看窗口 | trend lookback
+    gps_native_trend_min_drop: 0.15       # σ_now ≤ σ_past·(1−此值) 才算下降 | required decline
+    gps_native_trend_sigma_ceiling: 1.5   # m；σ 高于此不触发 | no trigger above this
+    gps_native_trend_sigma_scale: 1.0     # 因子 σ = native σ × 此值 | factor sigma multiplier
+    gps_native_trend_sigma_floor: 0.3     # m；尾段因子 σ 下限 | tail factor sigma floor
+
+    # ---- 起始航向 | startup heading ----
+    # 固定值(度)=跳过偏航预热（总朝已知方向，如充电桩）；NaN=由 GPS 位移自估(需~2m)。
+    # Finite (deg)=skip yaw warmup (always starts facing a known dir, e.g. dock); NaN=auto-estimate from GPS (~2m).
+    initial_yaw_deg: .NaN
+    use_gnss_heading: false         # GNSS 航向仅作 SVD 启动种子/校验，不直接置 ready | seed/validation only
+    gnss_heading_min_travel: 0.3    # m
+
+    # GPS↔雷达时钟偏移（中性默认同钟；Livox 平台 overlay 覆盖如 37.0）
+    # GPS↔LiDAR clock offset (neutral default = synced; Livox platforms override e.g. 37.0)
+    lidar_time_offset: 0.0          # s
+
+    # ---- 重定位结果对齐 | relocalization-result alignment ----
+    map_init_topic: "/relocalization/result"
+    enable_map_init_alignment: true
+    relocalization_max_assoc_dt_sec: 0.5
+    relocalization_stale_after_sec: 2.0
+    relocalization_duplicate_pos_thresh_m: 0.2
+    relocalization_duplicate_yaw_thresh_rad: 0.034906585
+    relocalization_prior_sigmas: [0.35, 0.35, 0.10, 0.30, 0.30, 1.50]
+
+    # ------------------------------------------------------------------------
+    # 回环检测 + 防发散护栏 | loop closure + anti-divergence guards
+    # ------------------------------------------------------------------------
+    loop_closure_enabled: true
+    loop_closure_frequency: 1.0     # Hz，ScanContext 查询速率 | ScanContext query rate
+    scan_context_dist_threshold: 0.15
+    scan_context_num_candidates: 10       # top-N 候选 | top-N candidates
+    scan_context_exclude_recent_num: 30   # 排除最近 N 帧 | exclude N most-recent keyframes
+    history_keyframe_fitness_score: 0.2   # VGICP 适配度门 | VGICP fitness gate
+    history_keyframe_search_radius: 15.0  # m
+    loop_local_map_radius: 8              # 匹配目标云每侧关键帧数 | keyframes each side for the target cloud
+    # 关键：header 默认 30m 会让 fitness 失效（任意源点都能在 30m 内找到目标）→ 误回环
+    # 通过 fitness 门 → 灾难发散（无此参曾观测到 186km 级联）。
+    # CRITICAL: header default 30m makes fitness meaningless (any source point finds a target within 30m)
+    # → wrong loops pass the gate → catastrophic divergence (186 km cascade observed without this).
+    loop_max_correspondence_distance: 1.5  # m
+    # VGICP 迭代上限，约束单次回调延迟；需 >20 迭代才收敛的回环几乎都是错匹配。
+    # Cap VGICP iterations to bound per-callback latency; loops needing >20 iters are almost always wrong.
+    loop_max_iterations: 10
+    loop_callback_warn_ms: 150.0
+    # 回环冷却：杀掉近重复的已接受回环（反复重踩同一闭环邻域）。
+    # Loop cooldown: kill near-duplicate accepted loops (retreading the same closure neighborhood).
+    loop_cooldown_query_kf: 5             # 距上次接受回环的最小关键帧间隔 | min kf gap since last accepted loop
+    loop_cooldown_match_neighborhood: 5   # 距上次匹配点的最小关键帧间隔 | min kf gap from last accepted match
+    # 连续拒绝退避：图位姿不一致时节流 VGICP 重试风暴（189 次连败曾把前端饿成 NEP 失控）。
+    # Consecutive-rejection backoff: throttles the VGICP retry storm when poses are inconsistent
+    # (189 back-to-back failures once starved the front-end into an NEP runaway).
+    loop_fail_streak_to_backoff: 8
+    loop_fail_backoff_base_sec: 15.0
+    loop_fail_backoff_max_sec: 30.0
+    loop_fail_backoff_reset_sec: 45.0    # 重置连败计数的静默间隔（须 > max_sec）| quiet gap that resets the streak
+    # 误回环 GPS 一致性闸：两端都有 FIX 级 GPS 时，ICP 相对位姿与 RTK 相对位姿差 > 阈值则拒。
+    # Loop GPS-consistency gate: reject loops whose ICP-relative disagrees with RTK-relative by > threshold
+    # when both endpoints have stored FIX-quality GPS. Catches ScanContext false positives in repetitive geometry.
+    loop_gps_consistency_max_disagreement: 3.0   # m
+    loop_gps_consistency_min_status: 8
+    loop_max_correction_m: 5.0           # ICP 拉拽超此则拒（与 GPS 无关的误匹配护栏）| reject loops whose ICP yank exceeds this
+    loop_robust_kernel: "none"           # 鲁棒 M 估计（默认关）| robust m-estimator (off)
+    loop_robust_kernel_param: 1.0
+    # 回环 Hessian 各向异性噪声（Hinduja 部分因子）：0.0=关闭（所有自由度均匀方差）。
+    # Loop Hessian anisotropic noise (Hinduja partial factor): 0.0=disabled (uniform variance for all DOF).
+    loop_hessian_eigenvalue_ratio: 0.0
+
+    # ------------------------------------------------------------------------
+    # CPU 预算（单一来源） | CPU budget (single source)
+    # ------------------------------------------------------------------------
+    # 0=自动探测亲和掩码(cpuset-aware)，>0=固定。executor/VGICP 线程团均由此派生。
+    # 0=auto-detect the affinity mask (cpuset-aware), >0=pin. Executor pool and VGICP team derive from this.
+    cpu_cores: 0
+    # 回环工作线程用 SCHED_IDLE：只吃前端空出的 CPU（VGICP storm 持续 0.7-1.1 核会饿死 4 核上的 FLIO）。
+    # Loop worker at SCHED_IDLE: only consumes idle CPU (a VGICP storm sustains 0.7-1.1 cores, enough to starve FLIO on 4 cores).
+    loop_thread_priority: "idle"
+
+    # ------------------------------------------------------------------------
+    # BetweenFactor 噪声（方差，非 sigma） | BetweenFactor noise (variance, not sigma)
+    # ------------------------------------------------------------------------
+    between_noise_rot: 1.0e-3
+    between_noise_xy: 0.01
+    between_noise_z: 1.0e-3
+    enu_yaw_tau: 0.0                # legacy，anchor 架构忽略 | legacy, ignored by the anchor architecture
+
+    # ------------------------------------------------------------------------
+    # ENU→cam 锚点先验（P1 anchor-node） | ENU→cam anchor prior (P1 anchor-node)
+    # ------------------------------------------------------------------------
+    # roll/pitch：两帧皆重力对齐，近固定规范；yaw：SVD 启动锁到 <0.1°，留 ~0.5° 慢漂；
+    # txy：SVD 残差 ~3cm，勿随噪声游走；tz：FLIO 长包累积数米 Z 漂，0.5m 容许渐进吸收。
+    # roll/pitch: both frames gravity-aligned, near-fixed gauge; yaw: SVD nails <0.1°, allow ~0.5° slow drift;
+    # txy: SVD residuals ~3cm, must not wander on noise; tz: FLIO accrues a few m of Z drift over long bags, 0.5m allows gradual absorption.
+    anchor_prior_sigma_roll_pitch_rad: 0.005   # ≈0.3°
+    anchor_prior_sigma_yaw_rad:        0.01    # ≈0.57°
+    anchor_prior_sigma_txy_m:          0.05
+    anchor_prior_sigma_tz_m:           0.5
+
+    # 对齐看门狗（P0-2）：锁定后若每帧 GPS 残差随行进系统性增长=偏航锁错（xsw 类±180°），
+    # 触发长基线 SVD 重锚。 Alignment watchdog: post-lock, systematic residual growth vs travel = wrong locked yaw → long-baseline SVD re-anchor.
+    alignment_watchdog_enable: true
+    alignment_watchdog_residual_threshold_m: 5.0
+    alignment_watchdog_min_strikes: 10
+    alignment_watchdog_min_growth_per_meter: 0.02
+    alignment_watchdog_realign_sigma_yaw_rad: 0.1
+    alignment_watchdog_min_yaw_correction_deg: 5.0
+    alignment_watchdog_cooldown_sec: 60.0
+
+    # 分级锚点先验（P0-1）：默认 OFF，验证前勿开（会改动已验证的 σ_yaw=0.01 安装刚度）。
+    # Tiered anchor prior (P0-1): default OFF, do not enable before validation (changes the validated σ_yaw=0.01 install stiffness).
+    anchor_tiered_prior_enable: false
+    anchor_prior_sigma_yaw_install_rad: 0.1
+    anchor_tighten_min_fix_factors: 20
+    anchor_tighten_max_yaw_sigma_rad: 0.02
+
+    # ------------------------------------------------------------------------
+    # GPS 方差下限 + 状态分级 + FIX 恢复 | GPS variance floor + status tiers + FIX recovery
+    # ------------------------------------------------------------------------
+    # 取 max(上报cov, floor)；下限 < 典型 RTK cov，让优质 RTK 原样通过。
+    # Use max(reported_cov, floor); floor < typical RTK cov so good RTK passes through at actual quality.
+    gps_xy_var_floor: 1.0e-3
+    gps_z_var_floor: 1.0e-3
+    # 状态分级 floor：原读 FP 原始 gnss1_status。canonical 链下 odom_adapter 已做
+    # status→协方差映射，故 PGO 侧默认 OFF（走上面 cov 驱动的 degraded 处理）。
+    # 若某 profile 直连原始 FP 状态可置 true。下列分级值保留备用。
+    # Status-tiered floor: originally read raw FP gnss1_status. Under the canonical chain the odom_adapter
+    # already maps status→covariance, so this is OFF by default on the PGO side (the cov-driven degraded
+    # handling above is the active path). A profile wired to raw FP status may set it true; tiers kept below.
+    gps_status_aware: false
+    gps_floor_xy_fix: 1.0e-4
+    gps_floor_z_fix: 1.0e-4
+    gps_floor_xy_float: 5.0e-2
+    gps_floor_z_float: 1.0e-1
+    gps_floor_xy_ppp: 1.0
+    gps_floor_z_ppp: 4.0
+    gps_floor_xy_fused: 4.0
+    gps_floor_z_fused: 9.0
+    # FIX 恢复：非FIX→FIX 跳变时吸收累积漂移。≤0.5m 一次性 σ=3mm snap；>0.5m 用 10 帧 σ≈5cm 渐进窗。
+    # FIX recovery: on non-FIX→FIX transition absorb accumulated drift. ≤0.5m one-shot σ=3mm snap; >0.5m a 10-frame σ≈5cm gradual window.
+    gps_floor_xy_fix_recovery: 1.0e-5
+    gps_floor_z_fix_recovery:  1.0e-5
+    gps_fix_recovery_max_drift: 0.5
+    gps_floor_xy_fix_recovery_gradual: 2.5e-3
+    gps_floor_z_fix_recovery_gradual:  2.5e-3
+    gps_fix_recovery_gradual_count: 10
+    gps_fix_recovery_min_non_fix_streak: 5   # 迟滞：需连续 N 个非FIX 才能再触发恢复 | hysteresis before recovery can re-fire
+
+    # ------------------------------------------------------------------------
+    # Twist(轮速)融合 | Twist (wheel) odometry fusion
+    # ------------------------------------------------------------------------
+    use_twist_odom: false           # 中性默认 OFF；凡平台有轮速编码器的 profile 在 overlay 置 true | neutral OFF; profiles with a wheel encoder set true
+    # /lio/twist 时间戳在源钟域（adapter 保留传感器/bag 戳，无戳源以节点钟补戳），GPS 钟差
+    # lidar_time_offset 不适用于它；若轮速源与关键帧（雷达钟）存在钟差则须在此平移
+    # （如 dd 的无戳 raw_twist：bag 钟落后雷达钟 37s → dd overlay 置 37.0）。
+    # Canonical /lio/twist stamps stay in the source's clock domain (the adapter preserves
+    # the sensor/bag stamp; stampless sources get the node clock); the GPS-clock
+    # lidar_time_offset does NOT apply to them. Shift here when the twist source's clock
+    # differs from the keyframe (LiDAR) clock — e.g. dd's stampless raw_twist rides the bag
+    # clock 37 s behind the LiDAR clock, so the dd overlay sets 37.0.
+    twist_time_offset: 0.0          # s
+    # 相邻样本间隔超此值按掉线跳过（绝不外推桥接）；必须大于源周期并留抖动余量
+    # （5Hz 轮速 → 0.2s 周期；0.1 的旧上限把健康间隔全判为掉线 → 覆盖率恒 0）。
+    # Consecutive-sample gaps above this are skipped as dropouts (never bridged by
+    # extrapolation); must exceed the source period plus jitter (a 5 Hz wheel ticks at
+    # 0.2 s — the old 0.1 cap classified every healthy interval as a dropout → 0% coverage).
+    twist_max_gap_sec: 0.25         # s
+    twist_noise_rot: 0.10           # rad/s 基础噪声（松：软约束）| base noise (loose: soft constraint)
+    twist_noise_xy: 0.50            # m/s
+    twist_noise_z: 1.00             # m/s（Z 不约束 | Z unconstrained）
+
+    # ------------------------------------------------------------------------
+    # 里程计协方差钳制 | odometry covariance clamping
+    # ------------------------------------------------------------------------
+    odom_cov_floor: 1.0e-2
+    odom_cov_ceiling: 1.0
+
+# ============================================================================
+# FastLioPgoTransformFusion —— 融合 /odom 输出 | fused /odom output (folds the former imu_preint)
+# ============================================================================
+fast_lio_pgo_fusion:
+  ros__parameters:
+    # ---- canonical 内部话题（固定，勿改） | canonical internal topics (fixed, do not edit) ----
+    pgo_odom_topic: "/fast_lio_pgo/odometry"
+    lidar_odom_topic: "/Odometry"          # 低速源；high_rate 改用 correction+IMU | low-rate source; high_rate uses correction+IMU
+    correction_odom_topic: "/Odometry"     # FLIO2 原始里程计(~10Hz)锚定 IMU 积分 | raw FLIO odom (~10Hz) anchors IMU integration
+    alignment_topic: "/fast_lio_pgo/enu_to_odom"
+    gps_anchor_topic: "/lio/gps_odom"      # canonical ENU 锚 | canonical ENU anchor
+    imu_topic: "/lio/imu"                  # canonical 去偏 IMU（sensor_msgs/Imu）| canonical de-biased IMU
+    imu_input_type: "sensor_msgs"          # /lio/imu 已是标准 Imu 且已去偏 | already a standard, de-biased Imu
+    publish_map_to_odom_tf: true
+    use_relocalization: false              # 兼容旗标，融合恒消费 PGO 对齐 | compat flag; fusion always consumes PGO alignment
+
+    # ---- 坐标系命名：中性默认（命名/输出点在 overlay） | frame names: neutral default (naming/output point in overlay) ----
+    odom_frame: "odom"
+    base_frame: "base_link"
+    map_frame: "map"
+
+    # ---- 输出模式：中性默认低速路径 | output mode: neutral default low-rate path ----
+    # profile 可因精度需要开启 high_rate（如 giant base_link）；模式层 modes/prod.yaml 在
+    # 在线生产强制 true@100Hz（实时控制）。离线评估不覆盖。
+    # A profile may enable high_rate for accuracy (e.g. giant base_link); modes/prod.yaml forces
+    # true@100Hz for online production (real-time control). Offline eval does not override.
+    high_rate_odom: false                  # false=每次 /Odometry 回调发 T_corr 修正位姿 | publish T_corr-corrected pose every callback
+    output_hz: 50.0                        # Hz，仅 high_rate 时的定时器速率（生产层覆盖为 100）| timer rate when high_rate (prod overrides to 100)
+    imu_time_offset: 0.0                   # s，中性默认（FP 同钟）；Livox overlay 覆盖 | neutral (FP synced); Livox overrides in overlay
+
+    # ---- IMU 噪声模型 / 重力（算法常量） | IMU noise model / gravity (algorithm constants) ----
+    imu_acc_noise: 0.00399
+    imu_gyr_noise: 0.00156
+    imu_gravity: 9.80511
+    imu_acc_scale: 1.0                     # /lio/imu 为 m/s² → 1.0 | /lio/imu is m/s² → 1.0
+    extrinsic_rot: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
+    correction_stale_threshold: 1.0        # s，FLIO 修正断档抑制（FP ICP 尖峰可达 600ms）| FLIO correction-gap suppression (FP ICP spikes up to 600ms)
+
+    # ---- PGO 平滑（低速路径） | PGO smoothing (low-rate path) ----
+    pgo_gap_to_recover_sec: 5.0
+    pgo_recover_duration_sec: 3.0          # legacy，未用 | legacy, unused
+    pgo_recover_alpha: 0.1                 # legacy，未用 | legacy, unused
+    pgo_smooth_tau: 0.2                    # s，T_corr 低通时间常数（0=直接跳变）| T_corr lowpass time constant (0=snap)
+    pgo_snap_threshold: 1.0                # m，输出跳变超此则 T_corr 直接 snap（回环）| output jump above this snaps T_corr (loop closure)
+    max_fusion_speed: 5.0                  # m/s，融合输出速度超此则保持位姿（高速平台 overlay 调大）| hold pose if output speed exceeds this (fast platforms raise in overlay)
+
+    # ---- 输出修正 pacing | output correction pacing (lio_slam_core::OutputPacer) ----
+    # 对 sensor 模式融合输出的【修正分量】限斜率：PGO 关键帧修正/回环 unbending/重获FIX snap
+    # 不再瞬移 /odom（实测瞬移类：0.3-1.1m 微跳列车@15-55m/s、5.45m re-fix snap、回环后摆幅
+    # 数米 1-2s 内往返）；车辆自身运动原样通过。往返型瞬态在 pending offset 内自行抵消，
+    # 持续性修正在 |offset|/max_speed 秒内全额落地。默认 OFF：行为零变化。
+    # Slew-limits the CORRECTION component of the sensor-mode fused output: PGO keyframe
+    # corrections / loop unbending / re-fix snaps no longer teleport /odom (measured classes:
+    # 0.3-1.1m micro-jump trains at 15-55 m/s, 5.45m re-fix snap, post-loop swings that go out
+    # and back within 1-2s); the vehicle's own motion passes through. Out-and-back transients
+    # cancel inside the pending offset; persistent corrections land within |offset|/max_speed s.
+    # Default OFF: zero behavior change.
+    output_pacing_enable: false
+    output_pacing_max_speed: 1.5           # m/s，修正分量的最大输出斜率 | correction slew rate
+    output_pacing_snap_offset: 20.0        # m，pending 超此=重定位级，直接跳 | above this = relocalization, snap
+    output_pacing_max_gap_sec: 1.0         # s，输出断流超此重置连续性 | output gap above this resets continuity
+
+    # ---- high_rate base_link 锚定算法默认值（仅 high_rate_odom=true 生效）----
+    # ---- high_rate base_link anchoring defaults (active only when high_rate_odom=true) ----
+    base_anchor_tau: 0.5                   # s，base-to-base 漂移锚低通 | lowpass for the base-to-base drift anchor
+    base_anchor_snap_threshold: 2.0        # m，初始化/GPS 恢复时 snap | snap on init / GPS recovery
+    base_anchor_drop_gap: 0.3              # s，前端发布间隔超此=IMU 外推突变→该帧 snap 到 GPS | front-end gap > this = IMU surge → snap that frame to GPS
+    base_anchor_gps_var_good: 0.02         # m²（σ~0.14m），≤此=满信任拉向 GPS | ≤this = full trust, pull onto GPS
+    base_anchor_gps_var_bad: 0.25          # m²（σ~0.5m），≥此=冻结修正 | ≥this = freeze the correction
+
+    # ---- B-min 运行时偏置修正（实验性，默认全关） | B-min runtime bias correction (experimental, all OFF) ----
+    runtime_bias_fusion_enable: false
+    runtime_bias_correction_mode_enable: false
+    runtime_bias_xy_tau: 5.0
+    runtime_bias_yaw_tau: 5.0
+    runtime_bias_max_xy_speed: 0.10
+    runtime_bias_max_yaw_rate_deg: 2.0
+    runtime_bias_pgo_min_interval: 0.5
+    runtime_bias_pgo_residual_gate: 2.0
+    runtime_bias_stability_gate: 0.25
+    runtime_bias_min_stable_observations: 3
+    runtime_bias_anomaly_enter_residual: 1.0
+    runtime_bias_anomaly_enter_jump: 1.0
+    runtime_bias_anomaly_enter_spike_speed: 5.0
+    runtime_bias_anomaly_min_persist_count: 3
+    runtime_bias_anomaly_clear_residual: 0.3
+    runtime_bias_anomaly_clear_count: 5
+    runtime_bias_recovery_tau: 2.0
+    runtime_bias_snap_threshold: 1.5
+    runtime_bias_snap_min_confidence: 0.8
+    runtime_bias_yaw_enable: false
+    runtime_bias_debug: false
+
+# ============================================================================
+# NdtRelocalization —— 基于先验 PCD 地图的 NDT 重定位（Scheme 3，算法层）
+# NDT relocalization against a prior PCD map (Scheme 3, algorithm layer)
+# ============================================================================
+# prior_map_pcd / initial_pose_guess 属部署调整层，放 overlay。
+# prior_map_pcd / initial_pose_guess belong to the deployment layer (overlay).
+ndt_relocalization:
+  ros__parameters:
+    map_voxel_size: 0.5             # 先验地图降采样体素 | prior-map downsample voxel
+    scan_voxel_size: 0.2            # 合并扫描降采样体素 | merged-scan downsample voxel
+    scan_window_size: 6             # 累积扫描帧数 | scans accumulated before matching
+    min_scan_points: 800           # 匹配所需最少点数 | min points to attempt matching
+    ndt_resolution: 1.0            # NDT 内部体素分辨率 | NDT internal voxel resolution
+    ndt_step_size: 0.1            # 线搜索步长 | line-search step size
+    ndt_trans_eps: 0.01          # 收敛阈值 | convergence epsilon
+    ndt_max_iter: 30             # 最大迭代 | max iterations
+    fitness_score_thresh: 1.0    # 适配度超此则拒 | reject if fitness > threshold
+    auto_match: true             # 累够扫描后自动匹配 | auto-run when enough scans accumulated
+    publish_tf: false            # 广播 map→camera_init TF | broadcast map→camera_init TF
+    publish_aligned_cloud: false # 发布对齐点云 | publish aligned cloud

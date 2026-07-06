@@ -1,0 +1,54 @@
+# Sensor profile: CHCNAV CGI-610 (DKT GPCHC) IMU+GNSS + RoboSense RSM1 LiDAR.
+#
+# Declares one input chain consumed by input_adapters.launch.py. Each node picks
+# up the section matching its name; the adapters normalize every vendor stream
+# to the canonical /lio/* contract (docs/INPUT_ADAPTER_DESIGN.md §4, §7).
+
+imu_adapter:
+  ros__parameters:
+    driver: dkt
+    input_topic: /shm_gpchc
+    output_topic: /lio/imu
+    output_frame: base_link
+    # NOTE: the Chccgi610nav.msg comment cites the nominal CHCNAV spec (gyro
+    # deg/s, accel g), but dkt_gpchc_relay.py is "verified against the bag" as
+    # rad/s + m/s^2 and forwards with scale 1.0. We reproduce that verified
+    # behavior here; flip these to (pi/180, 9.80665) only if a device truly
+    # emits spec units.
+    acc_scale: 1.0
+    gyro_scale: 1.0
+    publish_orientation: false
+
+lidar_adapter:
+  ros__parameters:
+    driver: robosense
+    input_topic: /rsm1_1
+    output_topic: /lio/points
+    output_frame: rsm1_1
+    min_range: 0.5
+    max_range: 200.0
+
+odom_adapter:
+  ros__parameters:
+    driver: dkt
+    input_topic: /shm_gpchc
+    output_topic: /lio/gps_odom
+    output_frame: map
+    base_frame: base_link
+    # enu_origin_{lat,lon,alt} unset → anchored at the first GPCHC sample.
+    # GPCHC status: 42 = INS+RTK fixed (trusted); tune per device docs.
+    trusted_status: [42, 43]
+    trusted_xy_std: 0.02
+    trusted_z_std: 0.04
+    degraded_xy_std: 1.0
+    degraded_z_std: 2.0
+
+twist_adapter:
+  ros__parameters:
+    # No wheel encoder on this platform: derive a forward-speed proxy from the
+    # canonical odom's ENU velocity (‖v‖). NEUTRAL on giant; opt-in fallback.
+    driver: gnss_proxy
+    input_topic: /lio/gps_odom
+    output_topic: /lio/twist
+    output_frame: base_link
+    enforce_nhc: true

@@ -1,0 +1,19 @@
+# ============================================================================
+# profiles/xsw_hesai/fast_lio.yaml —— 前端物理传感器层 | front-end physical-sensor layer
+# ============================================================================
+# 来源：third_party/FAST_LIO/config/xsw_hesai.yaml（Hesai 32 线）。
+# Source: xsw_hesai.yaml (Hesai 32-line). lidar_type→2 / timestamp_unit→0 由 base 固定 (fixed by base).
+# ============================================================================
+
+/**:
+    ros__parameters:
+        preprocess:
+            scan_line: 32              # Hesai 32 线 | Hesai 32 rings
+            blind: 0.1                 # m
+        mapping:
+            det_range: 60.0            # m
+            extrinsic_est_en: true     # 在线精修雷达↔IMU 外参 | online-refine LiDAR↔IMU extrinsic
+            extrinsic_T: [-0.023944, 0.001915, -0.004262]
+            extrinsic_R: [0.999629161, 0.027169026, 0.001839893,
+                         -0.027217621, 0.998983238, 0.035940112,
+                         -0.000861564, -0.035976861, 0.999352252]

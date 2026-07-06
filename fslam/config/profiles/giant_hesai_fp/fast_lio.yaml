@@ -1,0 +1,33 @@
+# ============================================================================
+# profiles/giant_hesai_fp/fast_lio.yaml —— 前端物理传感器层 | front-end physical-sensor layer
+# ============================================================================
+# 只覆盖 fast_lio.base.yaml 的物理传感器项；深合并由 launch 完成。
+# Overrides ONLY the physical-sensor items of fast_lio.base.yaml. Deep-merged by the launch.
+#
+# 来源 | source: third_party/FAST_LIO/config/xsw_hesai.yaml —— /hesai210/original +
+# FP IMU（/fixposition/fpa/corrimu，与旧 /fp_standard/imu 中继流逐比特相同）这对组合的已标定外参
+# （直接的雷达↔IMU 杆臂，非 giant_allpoint 的 9m 桅杆杆臂）。
+# The validated LiDAR↔IMU extrinsic for the /hesai210 + FP-IMU pair (/fixposition/fpa/corrimu,
+# bit-identical to the old /fp_standard/imu relay) — a DIRECT lever (the robosense adapter
+# relabels the cloud frame without moving points), NOT giant_allpoint's 9m mast.
+# ============================================================================
+
+/**:
+    ros__parameters:
+        preprocess:
+            scan_line: 32              # Hesai-210 = 32 线 | 32 rings
+            blind: 0.1                 # m
+        mapping:
+            det_range: 60.0            # m
+            # 小杆臂、可在线精修（与 xsw_hesai.yaml 一致）| small lever, online-refinable (matches xsw_hesai.yaml)
+            extrinsic_est_en: true
+            # 雷达↔IMU 外参 | LiDAR↔IMU extrinsic (from xsw_hesai.yaml)
+            extrinsic_T: [-0.023944, 0.001915, -0.004262]
+            extrinsic_R: [ 0.999629161,  0.027169026,  0.001839893,
+                          -0.027217621,  0.998983238,  0.035940112,
+                          -0.000861564, -0.035976861,  0.999352252]
+            # FP IMU 噪声（xsw_hesai 标定值）| FP IMU noise (xsw_hesai calibrated)
+            acc_cov: 0.003993957088823881
+            gyr_cov: 0.0015636343949698187
+            b_acc_cov: 6.435665935353257e-05
+            b_gyr_cov: 3.564031869636761e-05

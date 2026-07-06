@@ -1,0 +1,29 @@
+# ============================================================================
+# profiles/mower/fast_lio.yaml —— 前端物理传感器层 | front-end physical-sensor layer
+# ============================================================================
+# 来源：third_party/FAST_LIO/config/mower.yaml（Livox，4 线）。
+# Source: mower.yaml (Livox, 4-line). lidar_type→2 / timestamp_unit→0 由 base 固定 (fixed by base).
+#
+# 说明：extrinsic_R 为雷达↔IMU 的 ~20° 俯仰（雷达相对 IMU 倾斜）；这与 PGO 侧 twist_extrinsic_rot
+# 单位阵不冲突——后者是 body→IMU（IMU 与车体近水平），二者是不同变换。
+# Note: extrinsic_R is the ~20° LiDAR↔IMU pitch (LiDAR tilted vs IMU); this does NOT conflict with the
+# PGO-side identity twist_extrinsic_rot, which is body→IMU (IMU ≈ level with the body). Different transforms.
+#
+# ⚠ 待确认 | TO CONFIRM: "mower" 还有一个 mower_flat.yaml 变体（MID360, lidar_type 4, 零外参,
+#   est_en true）。本文件取 Livox 的 mower.yaml（生产脚本所用）。若该 profile 实指 MID360 平台请告知。
+#   There is also a mower_flat.yaml variant (MID360, lidar_type 4, zero extrinsic, est_en true). This file
+#   uses the Livox mower.yaml (what the prod script used). Tell me if this profile means the MID360 rig instead.
+# ============================================================================
+
+/**:
+    ros__parameters:
+        preprocess:
+            scan_line: 4               # Livox 4 线 | Livox 4-line
+            blind: 0.3                 # m
+        mapping:
+            det_range: 20.0            # m，割草机近场 | mower near-field
+            extrinsic_est_en: false
+            extrinsic_T: [0.009, 0.025, 0.056]
+            extrinsic_R: [0.9426, 0.0, 0.3338,
+                          0.0,    1.0, 0.0,
+                         -0.3338, 0.0, 0.9426]

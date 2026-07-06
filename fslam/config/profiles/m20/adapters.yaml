@@ -1,0 +1,76 @@
+# Sensor profile: Deep Robotics M20 dog ("云深处 M20", fslam deployment) —
+# 96-ring PointCloud2 LiDAR + Fixposition VRTK GNSS/INS.
+#
+# Live topics (from the fslam deployment repo, whatever1111/fslam):
+#   /LIDAR/POINTS             sensor_msgs/PointCloud2 (RoboSense field layout:
+#                             per-point `timestamp` float64 ABSOLUTE seconds —
+#                             the old chain renamed it to `time` for FAST-LIO;
+#                             the robosense driver parses + relativizes it directly)
+#   /fixposition/fpa/corrimu  fixposition_driver_msgs/FpaImu     (bias-compensated IMU)
+#   /fixposition/fpa/odomenu  fixposition_driver_msgs/FpaOdomenu (ENU GNSS)
+# No wheel-speed ROS topic: the dog's /MOTION_INFO is bridged into the FP device
+# itself (driver `converter:`), so /lio/twist is a GNSS proxy and NOT fused.
+#
+# This profile replaces the legacy fslam chain (fp_imu_relay + rename_pointcloud_field
+# + ecef_to_enu_bridge) with the canonical /lio/* adapters.
+
+imu_adapter:
+  ros__parameters:
+    # corrimu（厂商补偿流），非 rawimu+自行去偏：IMUBIAS 矢量不在 rawimu 数据帧里
+    # （见 giant_allpoint 同款注释/3764cd5），且 v1.2.0 镜像的 imu_adapter 二进制仍带
+    # 恒等帧减法 bug —— corrimu 让旧镜像也能正确工作。
+    # corrimu (vendor-compensated), NOT rawimu+own-debias: the IMUBIAS vector is not in
+    # the rawimu data frame (see the giant_allpoint note / 3764cd5), and the v1.2.0 image's
+    # imu_adapter binary still carries the identity-frame-subtraction bug — corrimu keeps
+    # old images correct too.
+    driver: fixposition
+    input_topic: /fixposition/fpa/corrimu
+    # corrimu 已带厂商补偿，绝不再去偏：bias 指向永不发布的话题 + 阈值封死。
+    # Never de-bias corrimu again: dead bias topic + threshold shut.
+    bias_topic: /lio/_unused_imubias
+    bias_status_threshold: 127
+    output_topic: /lio/imu
+    output_frame: base_link
+    # FP corrimu is already rad/s, m/s^2 (gravity-included).
+    acc_scale: 1.0
+    gyro_scale: 1.0
+
+lidar_adapter:
+  ros__parameters:
+    # /LIDAR/POINTS carries the RoboSense PointCloud2 layout (absolute float64
+    # per-point `timestamp`) → the robosense driver relativizes it to canonical
+    # XYZIRT `time` (seconds since scan start).
+    driver: robosense
+    input_topic: /LIDAR/POINTS
+    output_topic: /lio/points
+    output_frame: base_link
+    min_range: 0.3            # fslam mower.yaml blind: 0.3
+    max_range: 100.0
+
+odom_adapter:
+  ros__parameters:
+    driver: fixposition
+    input_topic: /fixposition/fpa/odomenu
+    output_topic: /lio/gps_odom
+    output_frame: map
+    base_frame: base_link
+    # FpaOdomenu.gnss1_status is the FpaGnssFix enum: 8 = RTK_FIXED, 7 = RTK_FLOAT,
+    # 5/4 = mere SPP 3D/2D.
+    trusted_status: [8]
+    trusted_xy_std: 0.02
+    trusted_z_std: 0.04
+    degraded_xy_std: 1.0
+    degraded_z_std: 2.0
+    # Native-covariance passthrough stays OFF (default) until this rig's RTK
+    # duty cycle is characterized — degraded-stretch rigs do better on buckets.
+
+twist_adapter:
+  ros__parameters:
+    # No wheel-speed ROS topic on the M20 (wheel data goes into the FP device via
+    # the driver's converter). Derive a longitudinal proxy from GNSS ENU velocity
+    # so /lio/twist exists; it is NOT fused (use_twist_odom=false in pgo.yaml).
+    driver: gnss_proxy
+    input_topic: /lio/gps_odom
+    output_topic: /lio/twist
+    output_frame: base_link
+    enforce_nhc: true

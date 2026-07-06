@@ -1,0 +1,97 @@
+# ============================================================================
+# fast_lio.base.yaml —— FAST-LIO 前端「算法常量层」 | FAST-LIO front-end "algorithm-constant layer"
+# ============================================================================
+# canonical 输入链下的前端基线，全部署共享。 Front-end baseline for the canonical input chain, shared by all deployments.
+#
+#   • 输入恒为 /lio/points + /lio/imu（适配器输出 Velodyne XYZIRT + 标准去偏 Imu）：
+#     lidar_type 恒=2、imu_input_type 恒="standard"、timestamp_unit 恒=0。厂商差异已在适配器层消化。
+#     Inputs are always /lio/points + /lio/imu (adapters emit Velodyne XYZIRT + standard de-biased Imu):
+#     lidar_type is always 2, imu_input_type always "standard", timestamp_unit always 0. Vendor specifics
+#     are absorbed in the adapter layer.
+#   • 【物理传感器层】（scan_line / blind / det_range / 雷达↔IMU 杆臂 extrinsic_T,R / extrinsic_est_en）
+#     放在 config/profiles/<profile>/fast_lio.yaml。
+#     The physical-sensor layer (scan_line / blind / det_range / LiDAR↔IMU lever extrinsic_T,R /
+#     extrinsic_est_en) lives in config/profiles/<profile>/fast_lio.yaml.
+#
+# ⚠ FAST-LIO 的 launch 只吃单个 config_file，故 base+profile 由 run_canonical_pipeline.launch.py
+#   在启动前深合并为一个临时配置再传入（不像 PGO 可多 --params-file）。
+#   FAST-LIO's launch takes a single config_file, so base+profile are deep-merged into one temp config
+#   by run_canonical_pipeline.launch.py before launch (unlike PGO which accepts multiple --params-file).
+#
+# 注意：imu_adapter 默认仅去偏、不旋转 IMU 轴（extrinsic_rot 默认单位阵），故雷达↔IMU 的
+# 旋转仍由本前端的 extrinsic_R 承担——各 profile 必须照搬其标定 extrinsic_R（非单位阵）。
+# Note: the imu_adapter only de-biases by default (extrinsic_rot defaults to identity), so the
+# LiDAR↔IMU rotation is still carried by this front-end's extrinsic_R — each profile must copy its
+# calibrated extrinsic_R (NOT identity).
+# ============================================================================
+
+/**:
+    ros__parameters:
+        # ---- 里程计/建图算法常量 | odometry/mapping algorithm constants ----
+        feature_extract_enable: false
+        point_filter_num: 3
+        max_iteration: 3
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 1000.0
+
+        # ---- canonical 输入（固定，勿改） | canonical inputs (fixed, do not edit) ----
+        common:
+            lid_topic:  "/lio/points"
+            imu_topic:  "/lio/imu"
+            imu_input_type: "standard"      # canonical IMU 为标准 sensor_msgs/Imu 且已去偏 | standard, pre-de-biased Imu
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+            imu_time_offset: 0.0
+
+        preprocess:
+            lidar_type: 2                   # 2=VELODYNE（canonical XYZIRT 布局，固定）| 2=VELODYNE (canonical XYZIRT layout, fixed)
+            scan_line:  32                  # 中性默认；profile 按真实雷达线数覆盖 | neutral; profiles override per real ring count
+            blind: 0.5                      # m，近距盲区（profile 可覆盖）| near blind radius (profiles may override)
+            timestamp_unit: 0               # 0=秒（canonical time 为相对秒，固定）| 0=seconds (canonical time is relative seconds, fixed)
+            scan_rate: 10
+
+        mapping:
+            # IMU 噪声/偏置随机游走（算法常量）| IMU noise / bias random-walk (algorithm constants)
+            acc_cov: 0.01
+            gyr_cov: 0.005
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree:    360.0
+            det_range:     60.0             # m，中性默认；按雷达量程在 profile 覆盖 | neutral; profiles override per LiDAR range
+            extrinsic_est_en:  false        # 在线估计雷达↔IMU 外参（中性默认关；profile 按需开）| online extrinsic estimation (neutral OFF; profiles enable as needed)
+            # 雷达↔IMU 杆臂：中性默认零平移+单位旋转，profile 必须覆盖为标定值。
+            # LiDAR↔IMU lever: neutral default zero translation + identity rotation; profiles MUST override with calibration.
+            extrinsic_T: [0.0, 0.0, 0.0]
+            extrinsic_R: [1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0]
+
+        # ---- 发布 | publish ----
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: false
+            map_period_sec: 5.0
+            scan_publish_en:  true
+            dense_publish_en: false
+            scan_bodyframe_pub_en: true
+
+        # ---- 先验地图预载（Scheme 1）：部署项，profile/运行时覆盖 | prior-map preload (Scheme 1): deployment item, override in profile/runtime ----
+        prior_map_pcd: ""
+        initial_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # x,y,z,roll°,pitch°,yaw°
+
+        # ---- 前端轮速融合（默认关；与 PGO twist 融合相互独立）| front-end wheel fusion (default OFF; independent of PGO twist fusion) ----
+        wheel_odom_en: false
+        wheel_topic: "/lio/twist"
+        wheel_speed_scale: 1.0
+        wheel_vel_noise_vx: 0.10
+        wheel_vel_noise_vy: 0.05
+        wheel_vel_noise_vz: 0.20
+        wheel_extrinsic_R: [1.0, 0.0, 0.0,
+                            0.0, 1.0, 0.0,
+                            0.0, 0.0, 1.0]
+
+        pcd_save:
+            pcd_save_en: false
+            interval: -1

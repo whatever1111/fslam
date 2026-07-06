@@ -1,0 +1,24 @@
+# ============================================================================
+# profiles/m20/pgo.yaml —— 部署调整层 | deployment-tuning layer
+# ============================================================================
+# 云深处 M20 机器狗 + Fixposition VRTK。只写与 pgo.base.yaml 的差异。
+# Deep Robotics M20 dog + Fixposition VRTK. Deltas vs pgo.base.yaml only.
+# ============================================================================
+
+fast_lio_pgo:
+  ros__parameters:
+    # 雷达 /LIDAR/POINTS 的 timestamp 与 FP GPS 钟的偏差【未实测】。旧 fslam 链靠
+    # fp_imu_relay 的 auto_time_sync 在线吸收，说明两钟未必对齐 —— 部署后按
+    # docs 流程实测；若狗上系统钟经 NTP/GPS 同步则应接近 0。
+    # LiDAR↔GPS clock skew is UNMEASURED on this rig. The legacy fslam chain absorbed
+    # it with fp_imu_relay auto_time_sync, i.e. the clocks are not guaranteed aligned —
+    # measure after deployment; ~0 if the dog's system clock is NTP/GPS-disciplined.
+    lidar_time_offset: 0.0
+
+    # /lio/twist 只是 GNSS 纵向速度代理（M20 无轮速 ROS 话题）→ 不融合。
+    # /lio/twist is only a GNSS longitudinal proxy (no wheel-speed ROS topic) → not fused.
+    use_twist_odom: false
+
+fast_lio_pgo_fusion:
+  ros__parameters:
+    base_frame: "base_link"

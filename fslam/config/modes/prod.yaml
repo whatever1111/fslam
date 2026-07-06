@@ -1,0 +1,18 @@
+# ============================================================================
+# modes/prod.yaml —— 「部署模式层」在线生产 | "deployment-mode layer" online production
+# ============================================================================
+# 最后加载，覆盖 base + profile。 Loaded last; overrides base + profile.
+#   --params-file pgo.base.yaml \
+#   --params-file profiles/<profile>/pgo.yaml \
+#   --params-file modes/prod.yaml          ← 本文件（最高优先级）| this file (highest priority)
+#
+# 在线生产面向【实时控制】：必须高频输出 /odom，覆盖任何 profile 的低速选择。
+# 离线评估不加载本文件（保留各 profile 精度最优的输出模式，便于按时间戳对齐评估）。
+# Online production targets real-time control: must output /odom at high rate, overriding any
+# profile's low-rate choice. Offline eval does NOT load this file (it keeps each profile's
+# accuracy-optimal output mode for by-stamp evaluation).
+# ============================================================================
+fast_lio_pgo_fusion:
+  ros__parameters:
+    high_rate_odom: true       # 生产强制高频：本地 IMU 积分 + 定时器输出，填补前端丢帧 | force high-rate: local IMU integration + timer output, fills scan-drop gaps
+    output_hz: 100.0           # Hz，实时控制默认 100Hz（解耦于 IMU/前端速率）| default 100Hz for real-time control (decoupled from IMU/front-end rate)

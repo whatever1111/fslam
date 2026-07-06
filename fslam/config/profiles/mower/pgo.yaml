@@ -1,0 +1,27 @@
+# ============================================================================
+# profiles/mower/pgo.yaml —— 部署调整层 | deployment-tuning layer
+# ============================================================================
+# 割草机平台（FP IMU + Livox，IMU/雷达近水平安装，无 20° 俯仰）。
+# 来源：config/params_fast_lio_pgo_mower.yaml 的部署增量。
+# Mower platform (FP IMU + Livox, IMU/LiDAR mounted near-level, no 20° pitch).
+# Source: deltas of config/params_fast_lio_pgo_mower.yaml.
+#   --params-file pgo.base.yaml --params-file profiles/mower/pgo.yaml
+# ============================================================================
+
+fast_lio_pgo:
+  ros__parameters:
+    # Livox 雷达时钟比 FP IMU/GPS 超前 ~37s | Livox LiDAR clock leads FP IMU/GPS by ~37s
+    lidar_time_offset: 37.0
+    # 割草机用 GNSS 航向做即时对齐 | mower uses GNSS heading for instant alignment
+    use_gnss_heading: true
+    # 重复几何场景收紧回环适配度门 + 启用各向异性回环噪声
+    # tighten loop fitness gate + enable anisotropic loop noise for repetitive geometry
+    history_keyframe_fitness_score: 0.3
+    loop_hessian_eigenvalue_ratio: 0.01
+    # 无轮速 twist 源 → 关闭（twist_extrinsic_rot 沿用 base 单位阵：近水平安装）。
+    # No wheel-twist source → off (inherits base identity twist_extrinsic_rot: near-level mount).
+    use_twist_odom: false
+
+fast_lio_pgo_fusion:
+  ros__parameters:
+    base_frame: "autocube_link"     # 该车 base_link 命名 | this vehicle's base_link name

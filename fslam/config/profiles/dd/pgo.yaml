@@ -1,0 +1,42 @@
+# ============================================================================
+# profiles/dd/pgo.yaml —— 部署调整层 | deployment-tuning layer
+# ============================================================================
+# DD autocube（Fixposition GNSS/INS IMU + Livox Mid-360）。与 live fixposition_livox 同平台，
+# 部署增量一致；GPS 锚点为 /fixposition/odometry_enu（odom_adapter 归一到 /lio/gps_odom）。
+# 来源：config/params_fast_lio_pgo.yaml 的部署增量。
+# DD autocube (Fixposition GNSS/INS IMU + Livox Mid-360). Same platform as the live
+# fixposition_livox rig, same deployment deltas; the GPS anchor is /fixposition/odometry_enu
+# (normalized to /lio/gps_odom by odom_adapter). Source: deltas of params_fast_lio_pgo.yaml.
+#   --params-file pgo.base.yaml --params-file profiles/dd/pgo.yaml
+# ============================================================================
+
+fast_lio_pgo:
+  ros__parameters:
+    # Livox 雷达时钟比 FP IMU/GPS 超前 ~37s（实测）→ 平移 GPS 时间戳对齐雷达钟。
+    # Livox LiDAR clock leads FP IMU/GPS by ~37s (measured) → shift GPS timestamps onto the LiDAR clock.
+    lidar_time_offset: 37.0
+
+    # 轮速融合：仅 lio_pgo_full_with_twist 带 /robot/twist；其余 DD 包无轮速时该因子自然缺省。
+    # Wheel fusion: only lio_pgo_full_with_twist carries /robot/twist; on the other DD bags the
+    # factor is simply absent (no twist published) — leaving this on is harmless.
+    use_twist_odom: true
+    # /robot/twist 无戳 → raw_twist adapter 以节点钟补戳（回放=bag 钟），而关键帧戳在雷达钟
+    # （超前 ~37s，见上）→ twist 戳必须做同样平移，否则永远落不进关键帧窗口、轮速因子静默失效。
+    # 与 lidar_time_offset 同一对时钟，故同值。
+    # /robot/twist is stampless → the raw_twist adapter stamps it with the node clock (= the bag
+    # clock on replay), while keyframes are stamped on the LiDAR clock (~37 s ahead, see above) →
+    # twist stamps need the same shift or they never land in a keyframe window and the wheel
+    # factor is silently dead. Same clock pair as lidar_time_offset, hence the same value.
+    twist_time_offset: 37.0
+    # Livox/IMU 约 20° 俯仰安装（相对 base_link）。R_{IMU_body←robot}=Ry(-20°)。
+    # The rig's IMU is mounted at ~20° pitch vs base_link; R_{IMU_body←robot}=Ry(-20°).
+    twist_extrinsic_rot: [0.9393, 0.0, -0.3432,
+                          0.0,    1.0,  0.0,
+                          0.3432, 0.0,  0.9393]
+
+fast_lio_pgo_fusion:
+  ros__parameters:
+    base_frame: "autocube_link"     # 该车 base_link 命名 | this vehicle's base_link name
+    # /lio/imu 现为 Livox 内置 IMU（雷达钟，与 /Odometry 同钟）→ 无需偏移。
+    # /lio/imu is now the Livox built-in IMU (LiDAR clock, same as /Odometry) → no offset.
+    imu_time_offset: 0.0

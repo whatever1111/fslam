@@ -1,0 +1,73 @@
+# Sensor profile: Giant ("大块头") Hesai+FP demo rig — Hesai Pandar-210 LiDAR +
+# Fixposition FP IMU/GNSS. For bags like rosbag2_2026_05_09-11_16_32 that carry:
+#   /hesai210/original  sensor_msgs/PointCloud2   (RoboSense field layout: x,y,z,
+#                       intensity, ring[uint16], timestamp[float64 abs], step 26)
+#   /fixposition/fpa/corrimu  fixposition_driver_msgs/FpaImu  (bias-compensated IMU)
+#   /fixposition/fpa/odomenu  fixposition_driver_msgs/FpaOdomenu  (ENU GNSS)
+# No wheel encoder (/fixposition/speed) in these bags → twist is a GNSS proxy.
+#
+# Front-end LiDAR↔IMU extrinsic comes from third_party/FAST_LIO/config/xsw_hesai.yaml
+# (the validated calibration for this /hesai210 + FP-IMU pair) — see fast_lio.yaml.
+
+imu_adapter:
+  ros__parameters:
+    # /fixposition/fpa/corrimu is the bias-compensated FP IMU (rad/s, m/s^2
+    # gravity-included). It is present in EVERY Hesai+FP bag, whereas the old
+    # /fp_standard/imu relay stream only exists in rosbag2_2026_05_09-11_16_32 —
+    # and there it is bit-identical to corrimu (same stamps/values), so this is
+    # a pure source swap, not a behavior change.
+    driver: fixposition
+    input_topic: /fixposition/fpa/corrimu
+    # corrimu already carries the vendor bias correction — never de-bias again:
+    # point the bias feed at a never-published topic and gate the threshold shut.
+    bias_topic: /lio/_unused_imubias
+    bias_status_threshold: 127
+    output_topic: /lio/imu
+    output_frame: base_link
+    acc_scale: 1.0
+    gyro_scale: 1.0
+
+lidar_adapter:
+  ros__parameters:
+    # Hesai-210 publishes the RoboSense PointCloud2 layout (ring uint16 + absolute
+    # float64 per-point timestamp) → the robosense driver parses it directly.
+    driver: robosense
+    input_topic: /hesai210/original
+    output_topic: /lio/points
+    output_frame: base_link
+    min_range: 0.1
+    max_range: 1000.0
+
+odom_adapter:
+  ros__parameters:
+    driver: fixposition
+    input_topic: /fixposition/fpa/odomenu
+    output_topic: /lio/gps_odom
+    output_frame: map
+    base_frame: base_link
+    # FpaOdomenu.gnss1_status is the FpaGnssFix enum: 8 = RTK_FIXED, 7 = RTK_FLOAT,
+    # 5/4 = mere SPP 3D/2D (the earlier [4, 5] was the CGI-610 GPCHC convention).
+    trusted_status: [8]
+    trusted_xy_std: 0.02
+    trusted_z_std: 0.04
+    degraded_xy_std: 1.0
+    degraded_z_std: 2.0
+    # Native-covariance passthrough is OFF here: this rig's bags spend long
+    # stretches in degraded RTK (status 5/7) where the FP INS under-reports its
+    # own error, so passing its covariance through over-trusts the drifting
+    # solution. A/B on rosbag2_2026_05_09-11_16_32 with the pgo neutral-floor
+    # fix: buckets mean 0.519 / p95 1.22 / pull 0.83 m vs native 0.742 / 1.62 /
+    # 0.97 m (the old 3.49 m end-tail is gone in both — it was the pgo fused
+    # floor clamp, not the covariance model). All-FIX platforms (giant_allpoint)
+    # keep native cov on.
+    use_native_covariance: false
+
+twist_adapter:
+  ros__parameters:
+    # No wheel encoder in these bags. Derive a longitudinal-speed proxy from the GNSS
+    # ENU velocity so /lio/twist exists; it is NOT fused (use_twist_odom=false in pgo.yaml).
+    driver: gnss_proxy
+    input_topic: /lio/gps_odom
+    output_topic: /lio/twist
+    output_frame: base_link
+    enforce_nhc: true

@@ -1,0 +1,74 @@
+# Sensor profile: Giant ("大块头") allpoint bag — Fixposition FP IMU/GNSS +
+# shm allpoint LiDAR. Drives the input_adapters container for the P3b
+# canonical-vs-production end-to-end ATE on 2026-06-26-10-56-21-bag.
+
+imu_adapter:
+  ros__parameters:
+    driver: fixposition
+    # 2026-07-06：rawimu+自行去偏 → corrimu（FP 官方补偿流）。实测（0702 停车窗三方仲裁）
+    # FPA IMUBIAS 矢量不在 rawimu 数据帧里：corrimu = rawimu − Rx(180°)·bias（加计+陀螺同构），
+    # 恒等帧减法把 y/z 校正反号 → /lio/imu 持续注入加计 [0, +0.030, −0.129] m/s²（|g| 9.68 vs
+    # 9.81）+ 陀螺 0.017°/s pitch 速率误差。bias 帧依设备安装配置而变，不可硬编码修符号 →
+    # 直接喂厂商补偿流（giant_hesai_fp 同款先例 d640076）。
+    # 2026-07-06: rawimu+own-debias → corrimu (FP-official compensated stream). Measured (0702
+    # parked-window three-way arbitration): the FPA IMUBIAS vector is NOT in the rawimu data frame —
+    # corrimu = rawimu − Rx(180°)·bias (accel AND gyro) — so identity-frame subtraction flips the y/z
+    # corrections, injecting a persistent accel [0, +0.030, −0.129] m/s² (|g| 9.68 vs 9.81) + 0.017°/s
+    # pitch-rate error into /lio/imu. The bias frame depends on the unit's mounting config, so the sign
+    # cannot be hard-coded — feed the vendor-compensated stream instead (giant_hesai_fp precedent d640076).
+    input_topic: /fixposition/fpa/corrimu
+    # corrimu 已带厂商补偿，绝不再去偏：bias 指向永不发布的话题 + 阈值封死（双保险；代码层
+    # 另有 FpaImu.bias_comp 防呆）。 corrimu already carries the vendor correction — never de-bias
+    # again: dead bias topic + threshold shut (belt & braces; the code also honors FpaImu.bias_comp).
+    bias_topic: /lio/_unused_imubias
+    bias_status_threshold: 127
+    output_topic: /lio/imu
+    output_frame: base_link
+    # FP corrimu already rad/s + m/s^2 (gravity-incl); no axis extrinsic here —
+    # FAST-LIO applies the LiDAR<->IMU lever (extrinsic_T/R).
+    acc_scale: 1.0
+    gyro_scale: 1.0
+
+lidar_adapter:
+  ros__parameters:
+    driver: allpoint
+    input_topic: /pre/all_point
+    output_topic: /lio/points
+    output_frame: base_link
+    min_range: 0.5
+    max_range: 1000.0
+
+odom_adapter:
+  ros__parameters:
+    driver: fixposition
+    input_topic: /fixposition/fpa/odomenu
+    output_topic: /lio/gps_odom
+    output_frame: map
+    base_frame: base_link
+    # FpaOdomenu.gnss1_status is the FpaGnssFix enum: 8 = RTK_FIXED, 7 = RTK_FLOAT,
+    # 5/4 = mere SPP 3D/2D. The earlier [4, 5] came from the CGI-610 GPCHC
+    # convention and treated real RTK_FIXED(8) as degraded (whole-bag σ=1m).
+    trusted_status: [8]
+    trusted_xy_std: 0.02
+    trusted_z_std: 0.04
+    degraded_xy_std: 1.0
+    degraded_z_std: 2.0
+    # Continuous FP INS covariance drives each GPS factor's weight (sweep on
+    # 2026-06-26-10-56-21 with the pgo floor fix: scale 0.5/1/2/4 -> /odom 2D
+    # mean 0.238/0.253/0.285/0.370 m; buckets-[8] 0.228 m but max 6.99 vs 3.0).
+    use_native_covariance: true
+    native_cov_scale: 1.0
+
+twist_adapter:
+  ros__parameters:
+    # Fixposition wheel encoder; residual wheel-radius scale ~1.018 applied
+    # downstream in FAST-LIO (wheel_speed_scale). Published but only consumed
+    # when wheel_odom_en / use_twist_odom is set (off for the ATE baseline).
+    driver: fixposition_wheel
+    input_topic: /fixposition/speed
+    output_topic: /lio/twist
+    output_frame: base_link
+    location: ""
+    skip_invalid: true
+    speed_scale: 1.0
+    enforce_nhc: true

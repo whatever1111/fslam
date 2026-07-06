@@ -1,0 +1,22 @@
+# ============================================================================
+# modes/eval.yaml —— 「部署模式层」离线评估 | "deployment-mode layer" offline evaluation
+# ============================================================================
+# 最后加载，覆盖 base + profile。 Loaded last; overrides base + profile.
+#
+# 离线评估按时间戳与 RTK 真值对齐。RTK（/fixposition/odometry_enu）发布在传感器点
+# FP_POI（如 giant ~9m 桅杆顶），故评估时 /odom 应报告【传感器点】而非 base_link，
+# 才能 apples-to-apples 比较（否则会差出整条杆臂 ~9m）。
+# Offline eval aligns to RTK truth by timestamp. RTK (/fixposition/odometry_enu) is published at the
+# sensor point FP_POI (e.g. giant's ~9m mast top), so for an apples-to-apples comparison /odom must
+# report the SENSOR point, not base_link — otherwise it differs by the whole ~9m lever.
+#
+# 对地面车（mower/xsw，传感器≈base_link）此项无差别；对 giant 桅杆机则关键。
+# For ground vehicles (mower/xsw, sensor ≈ base_link) this is a no-op; for the giant mast rig it matters.
+#
+# 生产部署用 base_link（控制需要车体参考）——见 profile 的 odom_output_frame 与 modes/prod.yaml。
+# Production deployment uses base_link (control needs the vehicle reference) — see the profile's
+# odom_output_frame and modes/prod.yaml.
+# ============================================================================
+fast_lio_pgo_fusion:
+  ros__parameters:
+    odom_output_frame: "sensor"   # 报告估计器/IMU 点，对齐 FP_POI RTK | report the estimator/IMU point, matches FP_POI RTK

@@ -1,0 +1,41 @@
+# ============================================================================
+# profiles/xsw_hesai/pgo.yaml —— 部署调整层 | deployment-tuning layer
+# ============================================================================
+# XSW 室外平台（Hesai 雷达 + Fixposition /fp_standard 参考里程计）+ NDT 先验地图重定位。
+# 来源：config/params_fast_lio_pgo_xsw.yaml 的部署增量。
+# XSW outdoor platform (Hesai LiDAR + Fixposition /fp_standard reference odom) + NDT prior-map reloc.
+# Source: deltas of config/params_fast_lio_pgo_xsw.yaml.
+#   --params-file pgo.base.yaml --params-file profiles/xsw_hesai/pgo.yaml
+# ============================================================================
+
+fast_lio_pgo:
+  ros__parameters:
+    # 大场景：放宽回环搜索半径 + 适配度门 | large scene: widen loop search radius + fitness gate
+    history_keyframe_fitness_score: 0.3
+    history_keyframe_search_radius: 25.0
+    # 参考里程计退化时上报 cov=1.0；用有意义的 floor 让下限（而非上报值）主导权重。
+    # The reference reports cov=1.0 when degraded; use meaningful floors so the floor (not the
+    # reported value) governs the weight. PPP/FUSED bias < LiDAR drift over typical FIX gaps here.
+    gps_xy_var_floor: 0.25
+    gps_z_var_floor: 1.0
+    # 当前 xsw 包无轮速 | no wheel odometry in the current xsw bag
+    use_twist_odom: false
+
+fast_lio_pgo_fusion:
+  ros__parameters:
+    base_frame: "autocube_link"     # 该车 base_link 命名 | this vehicle's base_link name
+    use_relocalization: true        # 启用 NDT 先验地图重定位链 | enable the NDT prior-map reloc chain
+
+ndt_relocalization:
+  ros__parameters:
+    # 大室外场景的 NDT 调参（比 base 更粗体素、更多迭代、更松适配度门）
+    # NDT tuning for the large outdoor scene (coarser voxels, more iterations, looser fitness gate than base)
+    map_voxel_size: 1.0
+    scan_voxel_size: 0.5
+    scan_window_size: 4
+    ndt_resolution: 2.0
+    ndt_max_iter: 60
+    fitness_score_thresh: 50.0
+    publish_aligned_cloud: true
+    # 已知起始位姿猜测 [x,y,z,roll°,pitch°,yaw°]（UTM-like 坐标）| known start-pose guess
+    initial_pose_guess: [675321.22, 3560267.47, 11.25, 0.0, 0.0, 20.13]

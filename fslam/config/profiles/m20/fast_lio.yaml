@@ -1,0 +1,38 @@
+# ============================================================================
+# profiles/m20/fast_lio.yaml —— 前端物理传感器层 | front-end physical-sensor layer
+# ============================================================================
+# 只覆盖 fast_lio.base.yaml 的物理传感器项；深合并由 launch 完成。
+# Overrides ONLY the physical-sensor items of fast_lio.base.yaml. Deep-merged by the launch.
+#
+# 来源 | source: fslam 部署仓库 (whatever1111/fslam) fslam/config/mower.yaml —— 云深处 M20
+# 上实跑过的前端参数（96 线雷达、20m 量程、FP IMU 标定噪声）。雷达经 lidar_adapter 转
+# canonical XYZIRT，故 lidar_type 保持 base 的 2 (VELODYNE)。
+# The front-end values that ran on the Deep Robotics M20 in the fslam deployment repo
+# (96-ring LiDAR, 20 m range, calibrated FP IMU noise). The cloud arrives via the
+# lidar_adapter as canonical XYZIRT, so lidar_type stays base's 2 (VELODYNE).
+# ============================================================================
+
+/**:
+    ros__parameters:
+        preprocess:
+            scan_line: 96              # M20 车载雷达 96 线 | 96 rings
+            blind: 0.3                 # m（fslam mower.yaml）
+        mapping:
+            det_range: 20.0            # m，短量程雷达 | short-range LiDAR (fslam mower.yaml)
+            # fslam 旧链发货 extrinsic=I 且注释自证 IMU↔雷达有 ~24° 俯仰未标定 —— 开在线
+            # 估计让前端吸收（与 giant_hesai_fp 同策略；7267f5d 证明 est_en 可吸收外参误差）。
+            # The legacy fslam chain shipped identity extrinsics while its own comment
+            # measured ~24° uncalibrated IMU↔LiDAR pitch — enable online estimation so the
+            # front end absorbs it (same policy as giant_hesai_fp; 7267f5d showed est_en
+            # absorbs extrinsic error).
+            extrinsic_est_en: true
+            extrinsic_T: [0.0, 0.0, 0.0]
+            extrinsic_R: [1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0]
+            # FP IMU 噪声（fslam mower.yaml 标定值，与 xsw/giant_hesai_fp 一致）
+            # FP IMU noise (fslam mower.yaml calibration, same values as xsw/giant_hesai_fp)
+            acc_cov: 0.003993957088823881
+            gyr_cov: 0.0015636343949698187
+            b_acc_cov: 6.435665935353257e-05
+            b_gyr_cov: 3.564031869636761e-05

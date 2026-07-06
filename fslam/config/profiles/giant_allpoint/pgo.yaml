@@ -1,0 +1,104 @@
+# ============================================================================
+# profiles/giant_allpoint/pgo.yaml —— 「部署调整层」 | "deployment-tuning layer"
+# ============================================================================
+# Giant(大块头 / xsw-47号车) allpoint bag —— FP IMU/GNSS + /pre/all_point shm 点云。
+# Giant allpoint bag — Fixposition IMU/GNSS + /pre/all_point shm cloud.
+#
+# 只声明【相对 pgo.base.yaml 的部署增量】，按 --params-file 顺序覆盖基线。
+# Declares ONLY the deployment delta vs pgo.base.yaml; overrides the baseline by load order.
+#   --params-file pgo.base.yaml --params-file profiles/giant_allpoint/pgo.yaml
+#
+# 平台特点 | platform traits:
+#   • FP IMU 已与雷达同钟 → 所有时间偏移=0。 FP IMU already on the LiDAR clock → all time offsets = 0.
+#   • 传感器(IMU/VRTK)在 ~9m 桅杆顶 → 必须用 base_link 杆臂把 /odom 落到车体。
+#     Sensor (IMU/VRTK) sits ~9m up a mast → must lever /odom down to the vehicle base_link.
+#   • 启用高速 base_link 模式：50Hz 定时器填补前端 ~10Hz 丢帧（bag1 /odom 2D 0.015m vs 低速 0.091m）。
+#     Enables high-rate base_link: a 50Hz timer fills the front-end's ~10Hz scan-drop gaps
+#     (bag1 /odom 2D 0.015m vs 0.091m low-rate).
+# ============================================================================
+
+fast_lio_pgo:
+  ros__parameters:
+    # FP IMU 与雷达同钟，GPS 时间戳无需平移 | FP IMU on LiDAR clock, no GPS timestamp shift
+    lidar_time_offset: 0.0
+    # 2026-07-05：接回 GNSS status 通道。native-cov 直通模式把 status 整条丢掉，PGO 降级判定
+    # 只剩 var>0.25 一条 cov 判据，而 FP native σ 是 INS 平滑的：掉出 FIX 后迟滞 4-18s 才爬过
+    # 阈值（0702 实测 34.4% 非FIX样本 var≤0.25 → 满权重密集因子锁向 float 偏置）。开启后
+    # status≠8 从第一个样本触发降级（×10+10m 稀化）+分级地板+P0 FIX-recovery。A/B（0702）：
+    # 全部降级窗 3-4× 改善（60s 窗 mean 0.38→0.11m）、全程 p50 减半、60s 盲推 pull 0.291→0.08-0.26；
+    # 代价 = 回环 unbending 输出瞬态放大 → 由 fusion 侧 output_pacing 钳制（见下方 fusion 段）。
+    # 2026-07-05: reconnect the GNSS status channel. Native-cov passthrough drops status
+    # end-to-end, leaving cov-only degraded detection (var>0.25) while FP's INS-smoothed σ lags
+    # float entry by 4-18s (measured on 0702: 34.4% of non-FIX samples ride at var≤0.25 →
+    # full-weight dense factors locking onto the float bias). With status_aware, status!=8
+    # triggers degraded handling (x10 + 10m thinning) from the FIRST sample, plus tiered floors
+    # and the P0 FIX-recovery FSM. A/B (0702): all degraded windows 3-4x better (60s window mean
+    # 0.38->0.11m), global p50 halved, 60s dead-reckon pull 0.291->0.08-0.26; the amplified
+    # post-loop unbending transient is clamped by output_pacing on the fusion side (below).
+    gps_status_aware: true
+    # 本平台有真实轮速编码器 /fixposition/speed（对 RTK corr 0.99 / scale~1.8% / RMSE 0.11 m/s，
+    # 已验证干净）→ 开启轮速融合。twist 为 base_link 纵向速度，沿用 base 的单位阵外参。
+    # This platform has a real wheel encoder /fixposition/speed (vs RTK corr 0.99 / scale~1.8% /
+    # RMSE 0.11 m/s, validated clean) → enable wheel fusion. Twist is base_link longitudinal speed,
+    # so it inherits the base identity twist_extrinsic_rot.
+    use_twist_odom: true
+
+fast_lio_pgo_fusion:
+  ros__parameters:
+    imu_time_offset: 0.0             # 同上：FP IMU 已在雷达钟域 | same: FP IMU already on LiDAR clock
+
+    # ---- 输出点：报告到车体 base_link，而非 9m 桅杆顶 | output at vehicle base_link, not the 9m mast ----
+    base_frame: "autocube_link"      # 该车 base_link 命名 | this vehicle's base_link name
+    odom_output_frame: "base_link"   # "sensor"=报告估计点(对齐 FP_POI RTK 真值，用于评估) | "sensor"=report estimator point (matches FP_POI RTK truth, for eval)
+    sensor_frame: "vrtk"             # 估计器跟踪的 IMU/VRTK 点 | the IMU/VRTK point the estimator tracks
+    lidar_odom_frame: "camera_init"  # FAST-LIO 局部地图根 | FAST-LIO local-map root
+    connect_lidar_odom_frame: true   # 静态 odom→camera_init 单位变换 → 单一 TF 树 | static identity → single TF tree
+
+    # ---- 高速 base_link 模式 | high-rate base_link mode ----
+    high_rate_odom: true             # giant 精度需要，两模式都开（生产层再升到 100Hz）| needed for accuracy in both modes (prod bumps to 100Hz)
+
+    # 2026-07-05：输出修正 pacing 开启（与 gps_status_aware 配套落地）。/odom 的修正分量限斜率
+    # 1.5 m/s：0626 A/B 输出瞬移 >0.5m 从 51 次→0、单步速度 p99.9 43.8→6.0 m/s（=车速+斜率设计界），
+    # 精度中性（mean 差异在运行方差带内，max 1.77→1.56）；0702 灾难运行下仍守住（>0.5m 仅 2 次
+    # 逃生门放行）。语义：衰减期间 /odom 与 TF 链短暂偏离 ≤ pending，|offset|/1.5s 内归零。
+    # 2026-07-05: output correction pacing ON (lands together with gps_status_aware). Slew-limits
+    # the /odom correction component at 1.5 m/s: 0626 A/B output steps >0.5m 51 -> 0, step-speed
+    # p99.9 43.8 -> 6.0 m/s (= vehicle + slew design bound), accuracy neutral (mean within run
+    # variance, max 1.77 -> 1.56); holds through the 0702 front-end blowup (2 escape-hatch steps).
+    # Semantics: during a decay /odom deviates from the TF chain by <= pending, gone in |offset|/1.5s.
+    output_pacing_enable: true
+
+    # sensor(IMU)→base_link 杆臂 = FAST-LIO giant_allpoint extrinsic_T / _R
+    # （作用于自洽的原始前端位姿；对 GPS 融合后输出施加杆臂几何上是错的）
+    # sensor(IMU)→base_link lever = FAST-LIO giant_allpoint extrinsic_T / _R
+    # (applied to the self-consistent raw front-end pose; levering the GPS-fused output is geometrically broken)
+    # 2026-07-05：随 fast_lio.yaml extrinsic_R 更新为包内恢复真值（本矩阵 = 其原样拷贝；恢复方法与
+    # 证据见 fast_lio.yaml 注释）。旧翻转值 tilt 方向差 90° → 本杆臂旋转在 prod 激活时有 29cm 固定误差。
+    # 2026-07-05: updated with fast_lio.yaml extrinsic_R to the bag-recovered TRUE value (verbatim copy;
+    # method/evidence in fast_lio.yaml). The old flipped value's 90°-off tilt direction put a standing
+    # 29cm error on this lever when active in prod.
+    # 2026-07-06：随 extrinsic_T 的约定修正同步（= 其原样拷贝；证据见 fast_lio.yaml）。
+    # 2026-07-06: updated with the extrinsic_T convention fix (verbatim copy; evidence in fast_lio.yaml).
+    base_link_lever_translation: [-8.887630, -0.179893, -2.934305]
+    base_link_lever_rotation: [-0.002439,  0.999832,  0.018160,
+                               -0.999916, -0.002207, -0.012775,
+                               -0.012733, -0.018190,  0.999753]
+
+    # GPS(FP_POI/传感器点) → base_link：把 ENU 锚从传感器点移到车体（实测落在 /tf world→baselink 0.14m 内）
+    # GPS(FP_POI/sensor point) → base_link: moves the ENU anchor to the vehicle (lands within 0.14m of /tf world→baselink)
+    # 2026-07-06：= 上方杆臂的逆（Rᵀ, −Rᵀt），随 T 约定修正重算。−Rᵀ·T_new 恰好回到厂商原值 V
+    # （IMU 在 baselink 帧的位置）——GPS(POI)=物理 IMU 点已被 A/B 证实（FE 与 POI 重合 0.06m）。
+    # 2026-07-06: = inverse of the lever above (Rᵀ, −Rᵀt) after the T convention fix. −Rᵀ·T_new lands
+    # exactly back on the vendor value V (IMU position in baselink) — GPS(POI) = the physical IMU
+    # point, proven by the A/B (FE coincides with POI to 0.06 m).
+    gps_to_base_link_translation: [-0.238915, 8.832368, 3.092688]
+    gps_to_base_link_rotation: [-0.002439, -0.999916, -0.012733,
+                                 0.999832, -0.002207, -0.018190,
+                                 0.018160, -0.012775,  0.999753]
+
+    # 雷达点云比 FP IMU/RTK 钟落后 ~0.13s → 实时 base_link /odom 沿航向超前；输出侧速度外推回正
+    # （仅低速路径生效；high_rate 下自动门控为 0）。4 次 bag1 标定中值 -0.148/均值 -0.135，取 -0.14。
+    # LiDAR cloud lags the FP IMU/RTK clock ~0.13s → real-time base_link /odom leads along-track; re-timed
+    # by velocity-extrapolating the output (low-rate path only; auto-gated to 0 in high_rate). Calibrated
+    # over 4 bag1 runs (median -0.148 / mean -0.135) → -0.14.
+    output_time_offset: -0.14

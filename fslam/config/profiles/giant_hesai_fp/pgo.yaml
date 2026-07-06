@@ -1,0 +1,26 @@
+# ============================================================================
+# profiles/giant_hesai_fp/pgo.yaml —— 「部署调整层」 | "deployment-tuning layer"
+# ============================================================================
+# Giant Hesai+FP demo rig（/hesai210/original + FP IMU/GNSS）。只声明相对 pgo.base.yaml
+# 的部署增量。Declares ONLY the deployment delta vs pgo.base.yaml.
+#
+# 平台特点 | platform traits:
+#   • FP IMU 与雷达同钟 → 所有时间偏移 = 0。 FP IMU on the LiDAR clock → all time offsets = 0.
+#   • 无真实轮速（bag 无 /fixposition/speed）→ 不启用轮速融合。 No wheel encoder → wheel fusion OFF.
+#
+# 注意 | NOTE: 与 giant_allpoint 不同，本机的传感器↔base_link 杆臂未在此固化（demo 台架几何待定）。
+#   评估模式（modes/eval.yaml → odom_output_frame=sensor）在传感器点输出，对 /lio/gps_odom 评估，
+#   不依赖该杆臂；若要 base_link 生产输出，请补 base_link_lever_* / gps_to_base_link_*（见 giant_allpoint）。
+#   Unlike giant_allpoint, this rig's sensor↔base_link lever is NOT pinned here (demo mounting TBD).
+#   Eval mode reports at the sensor point and scores vs /lio/gps_odom, so it does not need the lever;
+#   for base_link production output, add base_link_lever_* / gps_to_base_link_* (cf. giant_allpoint).
+# ============================================================================
+
+fast_lio_pgo:
+  ros__parameters:
+    lidar_time_offset: 0.0
+    use_twist_odom: false   # twist 仅为 GNSS 代理，无真实轮速 → 不融合 | GNSS-proxy twist only, not fused
+
+fast_lio_pgo_fusion:
+  ros__parameters:
+    imu_time_offset: 0.0

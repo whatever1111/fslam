@@ -1,0 +1,37 @@
+# ============================================================================
+# profiles/dd/fast_lio.yaml —— 前端物理传感器层 | front-end physical-sensor layer
+# ============================================================================
+# 只覆盖 fast_lio.base.yaml 中的物理传感器项（深合并由 launch 完成）。
+# Overrides ONLY the physical-sensor items of fast_lio.base.yaml (deep-merged by the launch).
+#
+# DD autocube：Livox Mid-360（经 lidar_adapter 转 canonical XYZIRT，故 lidar_type 仍=2）
+# + Fixposition IMU。来源：third_party/FAST_LIO/config/mower.yaml 的物理项，但 IMU 由
+# Livox-IMU 切换为 FP-IMU。 DD autocube: Livox Mid-360 (lidar_adapter → canonical XYZIRT, so
+# lidar_type stays 2) + Fixposition IMU. Source: physical items of mower.yaml, but the IMU is
+# switched from the Livox IMU to the FP IMU.
+# ============================================================================
+
+/**:
+    ros__parameters:
+        common:
+            # /livox/imu 与 /livox/points 同属 Livox 钟（实测戳差 < 30ms）→ 无需时钟桥接。
+            # （前端 IMU 已由 FP 切回 Livox 内置 IMU，见 adapters.yaml。）
+            # /livox/imu and /livox/points share the Livox clock (measured stamp diff < 30 ms)
+            # → no clock bridge. (The front-end IMU is the Livox built-in IMU, not the FP IMU;
+            # see adapters.yaml for why.)
+            time_offset_lidar_to_imu: 0.0
+        preprocess:
+            scan_line: 4               # Livox Mid-360
+            blind: 0.5                 # m（mid360.yaml 默认）
+        mapping:
+            det_range: 60.0            # m（Mid-360 量程；mower 用 20m 短量程，DD 户外放宽）
+            extrinsic_est_en: false    # 锁死在线杆臂估计（小车低速，避免病态）
+            # Livox 内置 IMU↔LiDAR 外参 = 出厂值（mid360.yaml）：旋转单位阵（IMU 与 LiDAR
+            # 轴对齐、同处一壳，20° 安装俯仰由 FAST-LIO 重力初始化吸收），仅有小平移。
+            # Livox built-in IMU↔LiDAR extrinsic = factory (mid360.yaml): identity rotation
+            # (the IMU is axis-aligned and co-housed with the LiDAR; the 20° mount pitch is
+            # absorbed by FAST-LIO gravity init), with only a small translation.
+            extrinsic_T: [-0.011, -0.02329, 0.04412]
+            extrinsic_R: [1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0]
