@@ -1,6 +1,7 @@
 [Unit]
 Description=RTK Localization Service
-After=network.target
+Wants=network-online.target docker.service
+After=network-online.target docker.service
 
 [Service]
 Type=simple
