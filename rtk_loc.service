@@ -2,13 +2,20 @@
 Description=RTK Localization Service
 Wants=network-online.target docker.service
 After=network-online.target docker.service
-
 [Service]
 Type=simple
 # 指定运行该脚本的用户
-User=user
+User=root
 # 设置工作目录，确保脚本内的相对路径能正确解析
 WorkingDirectory=/home/user/
+
+ExecStartPre=/bin/bash -c "echo '[INFO] Systemd waiting for physical network IP...'; while ! ip -4 addr show | grep -E '^[0-9]+: (eth|en)' -A 2 | grep -q 'inet '; do sleep 1; done; echo '[INFO] IP found!'"
+
+# 2. 核心大招：强制将 ROS 2 的组播网段路由指向 eth1 (如果你是用 eth0 通信，这里就改成 eth0)
+ExecStartPre=+/sbin/ip route replace 224.0.0.0/4 dev eth0
+
+# 3. 延时 2 秒让内核路由生效
+ExecStartPre=/bin/sleep 2
 # 执行命令，必须使用绝对路径
 ExecStart=/bin/bash  /home/user/fslam/fslam/run_fixposition_prod.sh
 # 发生故障时自动重启
@@ -22,4 +29,3 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-
