@@ -32,6 +32,7 @@
 # The numeric helpers are module-level pure functions (no rclpy) so they
 # translate 1:1 and can be unit-tested without ROS.
 
+import array
 import math
 import statistics
 import threading
@@ -240,7 +241,10 @@ class FixpositionOdomRelay(Node):
         self.declare_parameter("rtk_timeout_sec", 1.0)
         self.declare_parameter("matching_timeout_sec", 0.5)
         self.declare_parameter("error_hold_sec", 5.0)
-        self.declare_parameter("overtime_threshold_sec", 0.08)
+        # Above the 0.1 s scan period so benign jitter spikes don't flag it;
+        # sustained overrun still trips it every cloud (latest-scan-wins keeps
+        # the pipeline live either way, at reduced rate).
+        self.declare_parameter("overtime_threshold_sec", 0.15)
         self.declare_parameter("timestamp_skew_threshold_sec", 1.0)
 
         self.relay_enable = bool(self.get_parameter("relay_enable").value)
@@ -375,6 +379,7 @@ class FixpositionOdomRelay(Node):
         else:
             self.get_logger().warn("drdds not importable — /LOCATION_STATUS and leg-odom monitor disabled")
 
+        self._prof = {}  # per-cloud stage timings (ms), worker thread only
         self._worker = threading.Thread(target=self._cloud_worker, name="deskew_worker", daemon=True)
         self._worker.start()
 
@@ -575,11 +580,13 @@ class FixpositionOdomRelay(Node):
         elapsed = time.monotonic() - t0
         if elapsed > self.overtime_threshold:
             self._mark_err("overtime")
+        t_pub = time.monotonic()
         try:
             self.body_points_pub_.publish(out)
         except Exception as exc:  # pragma: no cover
             self._mark_err("pub")
             self.get_logger().error(f"Failed to publish body points: {exc}", throttle_duration_sec=5.0)
+        pub_ms = (time.monotonic() - t_pub) * 1e3
 
         # /LOCATION_STATUS shares the same stamp as the cloud (= newest /ODOM).
         if self.status_pub_ is not None:
@@ -587,16 +594,27 @@ class FixpositionOdomRelay(Node):
             self._last_cloud_status_mono = time.monotonic()
 
         self.cloud_count_ += 1
+        prof_str = " ".join(f"{k}={v:.1f}" for k, v in self._prof.items())
         if self.cloud_count_ == 1:
             self.get_logger().info(
                 f"First cloud published ({msg.width * msg.height} pts, deskew={'yes' if deskewed else 'NO'}, "
-                f"{elapsed * 1e3:.1f} ms, ref-scan offset {(t_ref - t_scan) * 1e3:.0f} ms)"
+                f"{elapsed * 1e3:.1f} ms, ref-scan offset {(t_ref - t_scan) * 1e3:.0f} ms | {prof_str} pub={pub_ms:.1f})"
             )
         elif self.cloud_count_ % 600 == 0:
-            self.get_logger().info(f"Published {self.cloud_count_} clouds (last {elapsed * 1e3:.1f} ms)")
+            self.get_logger().info(
+                f"Published {self.cloud_count_} clouds (last {elapsed * 1e3:.1f} ms | {prof_str} pub={pub_ms:.1f})"
+            )
+        elif elapsed + pub_ms * 1e-3 > self.overtime_threshold:
+            self.get_logger().warn(
+                f"Slow cloud: {elapsed * 1e3:.1f} ms | {prof_str} pub={pub_ms:.1f}",
+                throttle_duration_sec=10.0,
+            )
 
     def _deskew(self, msg: PointCloud2, t_scan, t_ref):
         """Return deskewed serialized point data, or None to fall back to relay."""
+        prof = self._prof
+        prof.clear()
+        m = time.monotonic()
         dtype, time_field = build_cloud_dtype(msg.fields, msg.point_step)
         if dtype is None or time_field is None:
             self.get_logger().warn("Cloud lacks xyz/time fields — relaying without deskew", throttle_duration_sec=10.0)
@@ -606,11 +624,15 @@ class FixpositionOdomRelay(Node):
             return None
         buf = bytearray(msg.data)
         arr = np.frombuffer(buf, dtype=dtype, count=n)
+        prof["parse"] = (time.monotonic() - m) * 1e3
+        m = time.monotonic()
         rel_scan = relative_point_times(arr[time_field], t_scan)
         if rel_scan is None:
             self.get_logger().warn("Unrecognized per-point time layout — relaying without deskew", throttle_duration_sec=10.0)
             return None
         rel_t = rel_scan + (t_scan - t_ref)  # seconds relative to the /ODOM ref
+        prof["times"] = (time.monotonic() - m) * 1e3
+        m = time.monotonic()
         with self._imu_lock:
             if not self._imu_t:
                 return None
@@ -619,6 +641,8 @@ class FixpositionOdomRelay(Node):
         with self._state_lock:
             newest = self._newest_odom
         vel = newest[3] if (newest is not None and self.deskew_use_vel) else None
+        prof["snap"] = (time.monotonic() - m) * 1e3
+        m = time.monotonic()
         xyz = np.empty((n, 3), dtype=np.float32)
         xyz[:, 0] = arr['x']
         xyz[:, 1] = arr['y']
@@ -626,11 +650,19 @@ class FixpositionOdomRelay(Node):
         if self._extrinsic is not None:
             rot, trans = self._extrinsic
             xyz = (xyz @ rot.T.astype(np.float32)) + trans.astype(np.float32)
+        prof["xyz"] = (time.monotonic() - m) * 1e3
+        m = time.monotonic()
         out_xyz = deskew_points(xyz, rel_t, imu_t, imu_w, t_ref, vel)
+        prof["math"] = (time.monotonic() - m) * 1e3
+        m = time.monotonic()
         arr['x'] = out_xyz[:, 0]
         arr['y'] = out_xyz[:, 1]
         arr['z'] = out_xyz[:, 2]
-        return bytes(buf)
+        # array('B') hits the generated setter's fast path; bytes would be
+        # re-validated per element in a Python loop (~1 µs × ~1 MB ≈ 0.9 s).
+        data = array.array('B', buf)
+        prof["pack"] = (time.monotonic() - m) * 1e3
+        return data
 
     # ---------------------------------------------------------------- status
 
