@@ -649,11 +649,14 @@ class FixpositionOdomRelay(Node):
         self._publish_status_raw(sec, nsec)
 
     def _publish_status_raw(self, sec, nsec):
+        # Real drdds layout (verified on-dog): LocationStatus.meta is a MetaType
+        # {uint64 frame_id, builtin_interfaces/Time stamp} — note `meta`, NOT
+        # `header` (MotionInfo DOES use `header`; OEM naming is inconsistent).
         msg = LocationStatus()
         self._status_seq += 1
-        msg.header.frame_id = self._status_seq
-        msg.header.timestamp.sec = sec
-        msg.header.timestamp.nsec = nsec
+        msg.meta.frame_id = self._status_seq
+        msg.meta.stamp.sec = sec
+        msg.meta.stamp.nanosec = nsec
 
         iv = msg.data.input_val
         iv.lidar = INPUT_OK if self._fresh("lidar") else INPUT_MISSING
