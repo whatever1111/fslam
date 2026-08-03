@@ -229,8 +229,10 @@ class FixpositionOdomRelay(Node):
         self.declare_parameter("lidar_to_base_xyzrpy", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         # ---- /LOCATION_STATUS ----
         self.declare_parameter("location_status_topic", "/LOCATION_STATUS")
-        # fallback status rate while the lidar is silent (cloud-synced otherwise)
-        self.declare_parameter("location_status_rate_hz", 10.0)
+        # /LOCATION_STATUS rate (OEM contract: 2 Hz). Cloud-synced publishes are
+        # throttled to this rate; the timer keeps it flowing when the lidar is
+        # silent. Stamps always come from the newest /ODOM either way.
+        self.declare_parameter("location_status_rate_hz", 2.0)
         self.declare_parameter("leg_odom_topic", "/MOTION_INFO")
         # matching health source (fslam-mode container odom). "" disables →
         # matching_error always normal (fixposition-only mode has no matching).
@@ -588,10 +590,13 @@ class FixpositionOdomRelay(Node):
             self.get_logger().error(f"Failed to publish body points: {exc}", throttle_duration_sec=5.0)
         pub_ms = (time.monotonic() - t_pub) * 1e3
 
-        # /LOCATION_STATUS shares the same stamp as the cloud (= newest /ODOM).
+        # /LOCATION_STATUS shares the same stamp as the cloud (= newest /ODOM),
+        # throttled to location_status_rate_hz (clouds arrive faster).
         if self.status_pub_ is not None:
-            self._publish_status_raw(ref_sec, ref_nsec)
-            self._last_cloud_status_mono = time.monotonic()
+            now_mono = time.monotonic()
+            if self._last_cloud_status_mono is None or now_mono - self._last_cloud_status_mono >= self._status_period:
+                self._publish_status_raw(ref_sec, ref_nsec)
+                self._last_cloud_status_mono = now_mono
 
         self.cloud_count_ += 1
         prof_str = " ".join(f"{k}={v:.1f}" for k, v in self._prof.items())
