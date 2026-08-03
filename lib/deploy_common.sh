@@ -49,11 +49,14 @@ fslam_stop_pidfile() {
 fslam_start_host_node() {
   local name="$1" script="$2" logdir="$3"
   shift 3
+  local profile_env=""
+  if [[ -n "${FASTDDS_CONFIG:-}" && -f "${FASTDDS_CONFIG}" ]]; then
+    profile_env="export FASTRTPS_DEFAULT_PROFILES_FILE='${FASTDDS_CONFIG}' && "
+  fi
   setsid bash -c "source '${HOST_ROS_SETUP}' \
     && export ROS_DOMAIN_ID='${ROS_DOMAIN_ID}' \
     && export RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
-    && export FASTRTPS_DEFAULT_PROFILES_FILE='${FASTDDS_CONFIG}' \
-    && exec python3 '${script}' $*" \
+    && ${profile_env}exec python3 '${script}' $*" \
     > "${logdir}/${name}.log" 2>&1 &
   printf '%s\n' "$!" > "${logdir}/${name}.pid"
   echo "[INFO] host node '${name}' up (pid $(<"${logdir}/${name}.pid"), log ${logdir}/${name}.log)"

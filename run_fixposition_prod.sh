@@ -40,6 +40,11 @@ HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-${BASE_DIR}/host/motion_info_to_twist.
 FP_TO_ODOM_SCRIPT="${FP_TO_ODOM_SCRIPT:-${BASE_DIR}/host/fp_to_odom.py}"
 CYCLONEDDS_CONFIG="${CYCLONEDDS_CONFIG:-${BASE_DIR}/config/dds/cyclonedds.xml}"
 FASTDDS_CONFIG="${FASTDDS_CONFIG:-${BASE_DIR}/config/dds/fastdds.xml}"
+# 实机验证(ChongQing):容器/宿主机/OEM 栈全部 FastDDS + OEM 同款 profile 才稳定
+# 互通;CycloneDDS 容器与 OEM FastDDS 栈互通不可靠。CONTAINER_RMW 可切回。
+# Field-verified: FastDDS with the OEM-identical profile EVERYWHERE (container,
+# host nodes, OEM stack). CycloneDDS↔OEM-FastDDS interop was unreliable.
+CONTAINER_RMW="${CONTAINER_RMW:-rmw_fastrtps_cpp}"
 ENTRYPOINT="${BASE_DIR}/container/entrypoint_fixposition.sh"   # 容器载荷 | container payload
 ENABLE_MOTION_INFO_BRIDGE="${ENABLE_MOTION_INFO_BRIDGE:-1}"
 FP_TO_ODOM_ARGS="${FP_TO_ODOM_ARGS:-}"
@@ -85,7 +90,7 @@ DOCKER_ARGS=(
   --restart unless-stopped
   --memory="${DOCKER_MEM_LIMIT}" --memory-swap="${DOCKER_MEM_SWAP}"
   -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID}"
-  -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+  -e RMW_IMPLEMENTATION="${CONTAINER_RMW}"
   -v /dev:/dev
   -v /dev/shm:/dev/shm
   -v /etc/localtime:/etc/localtime:ro
@@ -93,7 +98,9 @@ DOCKER_ARGS=(
   -v "${FIXPOSITION_CONFIG_DIR}:/fixposition_config:ro"
   -v "${LOG_DIR}:/data"
 )
-if [[ -f "${CYCLONEDDS_CONFIG}" ]]; then
+if [[ "${CONTAINER_RMW}" == "rmw_fastrtps_cpp" && -f "${FASTDDS_CONFIG}" ]]; then
+  DOCKER_ARGS+=(-e FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds.xml -v "$(realpath "${FASTDDS_CONFIG}"):/fastdds.xml:ro")
+elif [[ "${CONTAINER_RMW}" == "rmw_cyclonedds_cpp" && -f "${CYCLONEDDS_CONFIG}" ]]; then
   DOCKER_ARGS+=(-e CYCLONEDDS_URI=/cyclonedds.xml -v "$(realpath "${CYCLONEDDS_CONFIG}"):/cyclonedds.xml:ro")
 fi
 

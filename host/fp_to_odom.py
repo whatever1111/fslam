@@ -33,8 +33,10 @@
 # translate 1:1 and can be unit-tested without ROS.
 
 import math
+import statistics
 import threading
 import time
+from collections import deque
 
 import rclpy
 from nav_msgs.msg import Odometry
@@ -201,9 +203,20 @@ class FixpositionOdomRelay(Node):
         self.declare_parameter("output_topic", "/ODOM")
         self.declare_parameter("input_depth", 10)
         self.declare_parameter("output_depth", 10)
-        self.declare_parameter("target_child_frame_id", "base_link")
+        # OEM /ODOM carries an EMPTY child_frame_id (verified in dog bags)
+        self.declare_parameter("target_child_frame_id", "")
         # RTK liveness source for input_val.rtk (independent of the relay wiring)
         self.declare_parameter("rtk_topic", "/fixposition/odometry_enu")
+        # ---- on-dog fixes (ChongQing rigs, ported from the field version) ----
+        # Retime FP stamps onto the HOST clock: the VRTK's clock can drift or
+        # jump vs the dog's (PTP-disciplined) clock, while the lidar stamps —
+        # and therefore the shared-stamp triplet — live on the host axis.
+        # stamp += sliding-median(host_now − fp_stamp); a residual jump beyond
+        # retime_jump_sec resets the estimate (VRTK2 time jump). Relay mode only.
+        self.declare_parameter("retime_to_host_clock", True)
+        self.declare_parameter("retime_jump_sec", 0.5)
+        # OEM strips /ODOM covariance to zero — downstream expects that.
+        self.declare_parameter("zero_covariance", True)
         # ---- /LOC_BODY_POINTS ----
         self.declare_parameter("lidar_input_topic", "/LIDAR/POINTS2")
         self.declare_parameter("loc_body_points_topic", "/LOC_BODY_POINTS")
@@ -237,6 +250,10 @@ class FixpositionOdomRelay(Node):
         output_depth = int(self.get_parameter("output_depth").value)
         self.target_child_frame_id = self.get_parameter("target_child_frame_id").value
         rtk_topic = self.get_parameter("rtk_topic").value
+        self.retime_enable = bool(self.get_parameter("retime_to_host_clock").value) and self.relay_enable
+        self.retime_jump = float(self.get_parameter("retime_jump_sec").value)
+        self.zero_covariance = bool(self.get_parameter("zero_covariance").value)
+        self._retime_dbuf = deque(maxlen=50)  # host_now − fp_stamp samples
         lidar_topic = self.get_parameter("lidar_input_topic").value
         body_points_topic = self.get_parameter("loc_body_points_topic").value
         self.loc_body_frame_id = self.get_parameter("loc_body_frame_id").value
@@ -402,6 +419,22 @@ class FixpositionOdomRelay(Node):
     def _now_epoch(self):
         return self.get_clock().now().nanoseconds / 1e9
 
+    def _retime(self, sec, nsec):
+        """Translate an FP stamp onto the host clock axis (see param docs)."""
+        fp = sec + nsec * 1e-9
+        d = self._now_epoch() - fp
+        if self._retime_dbuf and abs(d - statistics.median(self._retime_dbuf)) > self.retime_jump:
+            self._retime_dbuf.clear()  # FP clock jumped — re-converge
+            self._mark_err("timestamp")
+        self._retime_dbuf.append(d)
+        t = fp + statistics.median(self._retime_dbuf)
+        out_sec = int(t)
+        out_nsec = int(round((t - out_sec) * 1e9))
+        if out_nsec >= 1_000_000_000:
+            out_sec += 1
+            out_nsec -= 1_000_000_000
+        return out_sec, out_nsec
+
     # ------------------------------------------------- executor-side callbacks
 
     def odom_cb(self, msg: Odometry):
@@ -415,12 +448,21 @@ class FixpositionOdomRelay(Node):
             self.get_logger().warn("Non-finite value in source odometry — message dropped", throttle_duration_sec=5.0)
             return
 
+        sec, nsec = msg.header.stamp.sec, msg.header.stamp.nanosec
+        if self.retime_enable:
+            sec, nsec = self._retime(sec, nsec)
+
         if self.relay_enable:
             out = Odometry()
-            out.header = msg.header
+            out.header.frame_id = msg.header.frame_id
+            out.header.stamp.sec = sec
+            out.header.stamp.nanosec = nsec
             out.child_frame_id = self.target_child_frame_id
             out.pose.pose = msg.pose.pose
             out.twist.twist = msg.twist.twist
+            if not self.zero_covariance:
+                out.pose.covariance = msg.pose.covariance
+                out.twist.covariance = msg.twist.covariance
             try:
                 self.publisher_.publish(out)
             except Exception as exc:  # pragma: no cover
@@ -428,11 +470,11 @@ class FixpositionOdomRelay(Node):
                 self.get_logger().error(f"Failed to publish odometry: {exc}", throttle_duration_sec=5.0)
                 return
 
-        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        t = sec + nsec * 1e-9
         vel = np.array([lv.x, lv.y, lv.z]) if np is not None else None
         with self._state_lock:
             self._initialized = True
-            self._newest_odom = (msg.header.stamp.sec, msg.header.stamp.nanosec, t, vel)
+            self._newest_odom = (sec, nsec, t, vel)
         # relay mode: we just published /ODOM; tracker mode: we just RECEIVED it —
         # either way /ODOM is verifiably flowing.
         self._last_odom_out_mono = time.monotonic()

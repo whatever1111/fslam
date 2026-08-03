@@ -2,7 +2,9 @@
 <CycloneDDS xmlns="https://cdds.io/config" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
     <Domain id="any">
         <General>
-            <NetworkInterfaceAddress>eth0</NetworkInterfaceAddress>
+            <!-- lo 必须包含:容器与宿主机节点同机通信走回环(ChongQing 实机修正)
+                 lo is required — in-host container↔host traffic runs over loopback -->
+            <NetworkInterfaceAddress>eth0,lo</NetworkInterfaceAddress>
             <AllowMulticast>true</AllowMulticast>
             <MaxMessageSize>1300</MaxMessageSize>
             <FragmentSize>1200</FragmentSize>
