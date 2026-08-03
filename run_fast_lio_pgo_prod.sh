@@ -22,7 +22,7 @@
 # `odom_topic` parameter; older images ignore it (pipeline keeps /odom, /ODOM
 # stays silent — visible via --check).
 #
-# 用法 | usage: fslam/run_fast_lio_pgo_prod.sh [选项]
+# 用法 | usage: ./run_fast_lio_pgo_prod.sh [选项]
 #   --profile <name>     profile(默认 m20)
 #   --image <img>        镜像(默认 wanderer123/fslam-humble:<arch>)
 #   --name <n>           容器名(默认 fslam-runtime)
@@ -44,10 +44,9 @@
 # ============================================================================
 set -euo pipefail
 
-BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # <checkout>/fslam
-REPO_DIR="$(cd "${BASE_DIR}/.." && pwd)"                   # <checkout>
-# shellcheck source=deploy_common.sh
-source "${BASE_DIR}/deploy_common.sh"
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 仓库根 | repo root
+# shellcheck source=lib/deploy_common.sh
+source "${BASE_DIR}/lib/deploy_common.sh"
 
 IMAGE="${DOCKER_IMAGE:-wanderer123/fslam-humble:$(fslam_arch_tag)}"
 NAME="${CONTAINER_NAME:-fslam-runtime}"
@@ -56,10 +55,12 @@ SWAP="${DOCKER_MEM_SWAP:-28g}"
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs/fslam_prod}"
 LIDAR_TOPIC="${LIDAR_TOPIC:-/LIDAR/POINTS2}"
-CYCLONEDDS_CONFIG="${CYCLONEDDS_CONFIG:-${REPO_DIR}/cyclonedds.xml}"
-FASTDDS_CONFIG="${FASTDDS_CONFIG:-${REPO_DIR}/fastdds.xml}"
-HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-${REPO_DIR}/motion_info_to_twist.py}"
-FP_TO_ODOM_SCRIPT="${FP_TO_ODOM_SCRIPT:-${REPO_DIR}/fp_to_odom.py}"
+CYCLONEDDS_CONFIG="${CYCLONEDDS_CONFIG:-${BASE_DIR}/config/dds/cyclonedds.xml}"
+FASTDDS_CONFIG="${FASTDDS_CONFIG:-${BASE_DIR}/config/dds/fastdds.xml}"
+HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-${BASE_DIR}/host/motion_info_to_twist.py}"
+FP_TO_ODOM_SCRIPT="${FP_TO_ODOM_SCRIPT:-${BASE_DIR}/host/fp_to_odom.py}"
+ENTRYPOINT="${BASE_DIR}/container/entrypoint_fslam.sh"             # 容器载荷 | container payload
+DRIVER_LAUNCH="${BASE_DIR}/container/fixposition_driver.launch"    # FP driver launch(容器内用)
 ENABLE_MOTION_INFO_BRIDGE="${ENABLE_MOTION_INFO_BRIDGE:-auto}"
 FP_TO_ODOM_ARGS="${FP_TO_ODOM_ARGS:-}"
 
@@ -121,12 +122,16 @@ if [[ -n "${CONFIG_DIR}" ]]; then
   [[ -d "${CONFIG_DIR}/profiles" ]] || { echo "[ERROR] --config-dir 须含 profiles/ | must contain profiles/: ${CONFIG_DIR}" >&2; exit 1; }
   CONFIG_DIR="$(realpath "${CONFIG_DIR}")"
 else
-  # 自动发现:配置树随部署仓库 checkout 走 | auto-discover from this checkout
-  for d in "${BASE_DIR}/config" "${REPO_DIR}/config"; do
-    if [[ -d "${d}/profiles" ]]; then CONFIG_DIR="$(realpath "${d}")"; break; fi
-  done
+  # 默认用本 checkout 的 canonical 配置树覆盖镜像内配置(单一事实源随 git pull 走)
+  # default: overlay the image config with this checkout's canonical tree
+  [[ -d "${BASE_DIR}/config/slam/profiles" ]] && CONFIG_DIR="$(realpath "${BASE_DIR}/config/slam")"
 fi
 [[ -f "${FP_TO_ODOM_SCRIPT}" ]] || { echo "[ERROR] 缺 fp_to_odom | missing: ${FP_TO_ODOM_SCRIPT}" >&2; exit 1; }
+for f in "${ENTRYPOINT}" "${DRIVER_LAUNCH}"; do
+  [[ -f "${f}" ]] || { echo "[ERROR] 缺容器载荷 | missing container payload: ${f}" >&2; exit 1; }
+done
+ENTRYPOINT="$(realpath "${ENTRYPOINT}")"
+DRIVER_LAUNCH="$(realpath "${DRIVER_LAUNCH}")"
 if [[ "${ENABLE_MOTION_INFO_BRIDGE}" == "auto" ]]; then
   [[ -f "${HOST_BRIDGE_SCRIPT}" ]] && ENABLE_MOTION_INFO_BRIDGE=1 || ENABLE_MOTION_INFO_BRIDGE=0
 fi
@@ -225,73 +230,10 @@ EOF
 fi
 
 # ============================================================================
-# 容器 entrypoint(写入 LOG_DIR → /data;容器 restart 时重读,LOG_DIR 必须持久)
-# ============================================================================
-cat > "${LOG_DIR}/entrypoint.sh" <<'EOFSCRIPT'
-#!/bin/bash
-set -o pipefail
-source /opt/ros/humble/setup.bash
-source /root/ros2_ws/install/setup.bash
-SHARE=/root/ros2_ws/install/lio_slam/share/lio_slam
-
-# ---- ① Fixposition driver:先开 RTK 输出 | bring up the RTK streams FIRST ----
-if [[ "${START_FIXPOSITION:-1}" == "1" ]]; then
-  : "${FP_CONFIG_FILE:=${SHARE}/config/fixposition/m20.yaml}"
-  if [[ ! -f "${FP_CONFIG_FILE}" ]]; then
-    echo "[ERROR] FP 驱动配置缺失 | FP driver config missing: ${FP_CONFIG_FILE}" >&2
-    exit 1
-  fi
-  cp "${FP_CONFIG_FILE}" /data/fixposition_runtime.yaml
-  if [[ -n "${FP_STREAM:-}" ]]; then
-    sed -i "s|^\([[:space:]]*stream:\).*|\1 ${FP_STREAM}|" /data/fixposition_runtime.yaml
-    echo "[INFO] FP stream 覆盖 | overridden: ${FP_STREAM}"
-  fi
-  cat > /data/fixposition.launch <<'EOFLAUNCH'
-<launch>
-  <node name="fixposition_driver_ros2" pkg="fixposition_driver_ros2"
-        exec="fixposition_driver_ros2_exec" output="screen"
-        respawn="true" respawn_delay="5">
-    <param from="/data/fixposition_runtime.yaml"/>
-  </node>
-</launch>
-EOFLAUNCH
-  echo "[STEP 1/2] Fixposition driver 启动中 | launching..."
-  setsid ros2 launch /data/fixposition.launch > /data/fixposition.log 2>&1 &
-
-  fp_up=0
-  for _ in $(seq 1 30); do
-    if timeout 5 ros2 topic list 2>/dev/null | grep -qx '/fixposition/fpa/odomenu'; then
-      fp_up=1; break
-    fi
-    sleep 1
-  done
-  if [[ "${fp_up}" == "1" ]]; then
-    if timeout 5 ros2 topic echo --once /fixposition/fpa/corrimu >/dev/null 2>&1; then
-      echo "[INFO] RTK 输出就绪(实收数据)| RTK streams up: /fixposition/fpa/{corrimu,odomenu}"
-    else
-      echo "[WARN] FPA 话题存在但 corrimu 5s 无数据 | FPA topics exist but no corrimu data in 5s (see /data/fixposition.log)"
-    fi
-  else
-    echo "[WARN] 30s 内未见 /fixposition/fpa/odomenu(驱动仍在 respawn,管线继续)| driver still respawning; continuing"
-  fi
-fi
-
-# 雷达是狗自带服务,本脚本不启动 —— 缺席只能告警。
-# The lidar driver is the dog's own service, never started here — warn only.
-if ! timeout 5 ros2 topic list 2>/dev/null | grep -qx "${LIDAR_TOPIC:-/LIDAR/POINTS2}"; then
-  echo "[WARN] 未发现雷达话题 | lidar topic missing: ${LIDAR_TOPIC:-/LIDAR/POINTS2}"
-fi
-
-# ---- ② canonical 管线(exec → 本进程即 run_prod_native.sh)-------------------
-# SLAM_PARAM_OVERLAY(/data/param_overlay.yaml)注入 odom_topic 直出层。
-echo "[STEP 2/2] canonical 管线 | pipeline: run_prod_native.sh --profile ${PROFILE} ${RUNNER_ARGS:-}"
-# shellcheck disable=SC2086  # RUNNER_ARGS 有意按词拆分 | intentional word-split
-exec bash "${SHARE}/tools/run_prod_native.sh" --profile "${PROFILE}" --log /data ${RUNNER_ARGS:-}
-EOFSCRIPT
-chmod +x "${LOG_DIR}/entrypoint.sh"
-
-# ============================================================================
 # 启动容器 | start the container
+# 容器载荷是随仓库的 entrypoint_fslam.sh + fixposition_driver.launch(只读挂
+# 载,restart 时重读)。The payload is the checked-in entrypoint_fslam.sh +
+# fixposition_driver.launch, mounted read-only and re-read on restart.
 # ============================================================================
 DOCKER_ARGS=(
   --name "${NAME}"
@@ -311,10 +253,12 @@ DOCKER_ARGS=(
   -v /dev:/dev
   -v /dev/shm:/dev/shm
   -v /etc/localtime:/etc/localtime:ro
+  -v "${ENTRYPOINT}:/entrypoint.sh:ro"
+  -v "${DRIVER_LAUNCH}:/fixposition_driver.launch:ro"
   -v "${LOG_DIR}:/data"
 )
 [[ -s "${OVERLAY_FILE}" ]] && DOCKER_ARGS+=(-e SLAM_PARAM_OVERLAY=/data/param_overlay.yaml)
-[[ -f "${CYCLONEDDS_CONFIG}" ]] && DOCKER_ARGS+=(-e CYCLONEDDS_URI=/data/cyclonedds.xml -v "$(realpath "${CYCLONEDDS_CONFIG}"):/data/cyclonedds.xml:ro")
+[[ -f "${CYCLONEDDS_CONFIG}" ]] && DOCKER_ARGS+=(-e CYCLONEDDS_URI=/cyclonedds.xml -v "$(realpath "${CYCLONEDDS_CONFIG}"):/cyclonedds.xml:ro")
 [[ -n "${FP_CONFIG}" ]]  && DOCKER_ARGS+=(-v "${FP_CONFIG}:/data/fixposition_config.yaml:ro" -e FP_CONFIG_FILE=/data/fixposition_config.yaml)
 [[ -n "${CONFIG_DIR}" ]] && DOCKER_ARGS+=(-v "${CONFIG_DIR}:/root/ros2_ws/install/lio_slam/share/lio_slam/config:ro")
 
@@ -349,7 +293,7 @@ start_host_nodes() {
 }
 
 if [[ "${DETACH}" == "1" ]]; then
-  docker run -d --restart unless-stopped "${DOCKER_ARGS[@]}" "${IMAGE}" bash /data/entrypoint.sh
+  docker run -d --restart unless-stopped "${DOCKER_ARGS[@]}" "${IMAGE}" bash /entrypoint.sh
   start_host_nodes
   fslam_start_container_watcher "${NAME}" "${LOG_DIR}" "${HOST_PID_FILES[@]}"
   docker ps --filter "name=${NAME}"
@@ -366,5 +310,5 @@ else
   trap cleanup_foreground EXIT INT TERM
   start_host_nodes
   echo "[INFO] 前台运行,Ctrl-C 停止 | running attached; Ctrl-C to stop."
-  docker run --rm "${DOCKER_ARGS[@]}" "${IMAGE}" bash /data/entrypoint.sh
+  docker run --rm "${DOCKER_ARGS[@]}" "${IMAGE}" bash /entrypoint.sh
 fi

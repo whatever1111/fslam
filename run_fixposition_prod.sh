@@ -24,10 +24,9 @@
 # ============================================================================
 set -euo pipefail
 
-BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # <checkout>/fslam
-REPO_DIR="$(cd "${BASE_DIR}/.." && pwd)"                   # <checkout>
-# shellcheck source=deploy_common.sh
-source "${BASE_DIR}/deploy_common.sh"
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 仓库根 | repo root
+# shellcheck source=lib/deploy_common.sh
+source "${BASE_DIR}/lib/deploy_common.sh"
 
 DOCKER_IMAGE="${DOCKER_IMAGE:-wanderer123/fslam-humble:$(fslam_arch_tag)}"
 CONTAINER_NAME="${CONTAINER_NAME:-fixposition-runtime}"
@@ -36,11 +35,12 @@ DOCKER_MEM_SWAP="${DOCKER_MEM_SWAP:-10g}"
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
 LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs/fixposition_only}"
-FIXPOSITION_CONFIG_DIR="${FIXPOSITION_CONFIG_DIR:-${REPO_DIR}/fixposition}"
-HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-${REPO_DIR}/motion_info_to_twist.py}"
-FP_TO_ODOM_SCRIPT="${FP_TO_ODOM_SCRIPT:-${REPO_DIR}/fp_to_odom.py}"
-CYCLONEDDS_CONFIG="${CYCLONEDDS_CONFIG:-${REPO_DIR}/cyclonedds.xml}"
-FASTDDS_CONFIG="${FASTDDS_CONFIG:-${REPO_DIR}/fastdds.xml}"
+FIXPOSITION_CONFIG_DIR="${FIXPOSITION_CONFIG_DIR:-${BASE_DIR}/config/fixposition}"
+HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-${BASE_DIR}/host/motion_info_to_twist.py}"
+FP_TO_ODOM_SCRIPT="${FP_TO_ODOM_SCRIPT:-${BASE_DIR}/host/fp_to_odom.py}"
+CYCLONEDDS_CONFIG="${CYCLONEDDS_CONFIG:-${BASE_DIR}/config/dds/cyclonedds.xml}"
+FASTDDS_CONFIG="${FASTDDS_CONFIG:-${BASE_DIR}/config/dds/fastdds.xml}"
+ENTRYPOINT="${BASE_DIR}/container/entrypoint_fixposition.sh"   # 容器载荷 | container payload
 ENABLE_MOTION_INFO_BRIDGE="${ENABLE_MOTION_INFO_BRIDGE:-1}"
 FP_TO_ODOM_ARGS="${FP_TO_ODOM_ARGS:-}"
 
@@ -54,6 +54,8 @@ for f in node.launch config_fp_only.yaml robot.urdf.xacro; do
     || { echo "[ERROR] FP 配置缺失 | missing FP config: ${FIXPOSITION_CONFIG_DIR}/${f}" >&2; exit 1; }
 done
 [[ -f "${FP_TO_ODOM_SCRIPT}" ]] || { echo "[ERROR] 缺 fp_to_odom | missing: ${FP_TO_ODOM_SCRIPT}" >&2; exit 1; }
+[[ -f "${ENTRYPOINT}" ]] || { echo "[ERROR] 缺容器载荷 | missing entrypoint: ${ENTRYPOINT}" >&2; exit 1; }
+ENTRYPOINT="$(realpath "${ENTRYPOINT}")"
 if [[ "${ENABLE_MOTION_INFO_BRIDGE}" == "1" && ! -f "${HOST_BRIDGE_SCRIPT}" ]]; then
   echo "[ERROR] 缺桥脚本 | missing bridge script: ${HOST_BRIDGE_SCRIPT}" >&2; exit 1
 fi
@@ -73,44 +75,10 @@ FP_TO_ODOM_SCRIPT="$(realpath "${FP_TO_ODOM_SCRIPT}")"
 fslam_stop_previous "${CONTAINER_NAME}" "${LOG_DIR}" \
   "${LOG_DIR}/motion_info_bridge.pid" "${LOG_DIR}/fp_to_odom.pid"
 
-# ---- 容器 entrypoint(写入 LOG_DIR → 容器内 /data)--------------------------
-cat > "${LOG_DIR}/entrypoint.sh" <<'EOFSCRIPT'
-#!/bin/bash
-set -o pipefail
-source /opt/ros/humble/setup.bash
-source /root/ros2_ws/install/setup.bash
-
-PIDS=()
-cleanup() {
-  echo ""; echo "[INFO] Shutting down..."
-  for pid in "${PIDS[@]}"; do kill -INT "${pid}" 2>/dev/null || true; done
-  sleep 3
-  for pid in "${PIDS[@]}"; do kill "${pid}" 2>/dev/null || true; done
-  wait 2>/dev/null || true
-  echo "[INFO] Shutdown complete."
-}
-trap cleanup SIGINT SIGTERM
-
-echo "[STEP 1/2] Fixposition driver 启动中 | launching..."
-ros2 launch /data/fixposition_config/node.launch \
-  config:=/data/fixposition_config/config_fp_only.yaml \
-  > /data/fixposition.log 2>&1 &
-PIDS+=($!)
-sleep 3
-
-echo "[STEP 2/2] robot_state_publisher 启动中 | launching..."
-robot_description="$(xacro /data/fixposition_config/robot.urdf.xacro)"
-ros2 run robot_state_publisher robot_state_publisher \
-  --ros-args -p robot_description:="${robot_description}" \
-  > /data/robot_state_publisher.log 2>&1 &
-PIDS+=($!)
-
-echo "[INFO] PIDs: ${PIDS[*]}  logs: /data/{fixposition,robot_state_publisher}.log"
-wait
-EOFSCRIPT
-chmod +x "${LOG_DIR}/entrypoint.sh"
-
 # ---- 起容器 | start the container -------------------------------------------
+# 容器载荷是随仓库的 entrypoint_fixposition.sh(只读挂载,restart 时重读)。
+# The container payload is the checked-in entrypoint_fixposition.sh,
+# mounted read-only and re-read on every container restart.
 DOCKER_ARGS=(
   --name "${CONTAINER_NAME}"
   --network host --ipc=host --pid=host
@@ -121,15 +89,16 @@ DOCKER_ARGS=(
   -v /dev:/dev
   -v /dev/shm:/dev/shm
   -v /etc/localtime:/etc/localtime:ro
-  -v "${FIXPOSITION_CONFIG_DIR}:/data/fixposition_config:ro"
+  -v "${ENTRYPOINT}:/entrypoint.sh:ro"
+  -v "${FIXPOSITION_CONFIG_DIR}:/fixposition_config:ro"
   -v "${LOG_DIR}:/data"
 )
 if [[ -f "${CYCLONEDDS_CONFIG}" ]]; then
-  DOCKER_ARGS+=(-e CYCLONEDDS_URI=/data/cyclonedds.xml -v "$(realpath "${CYCLONEDDS_CONFIG}"):/data/cyclonedds.xml:ro")
+  DOCKER_ARGS+=(-e CYCLONEDDS_URI=/cyclonedds.xml -v "$(realpath "${CYCLONEDDS_CONFIG}"):/cyclonedds.xml:ro")
 fi
 
 echo "[INFO] Starting ${CONTAINER_NAME} (${DOCKER_IMAGE})..."
-docker run -d "${DOCKER_ARGS[@]}" "${DOCKER_IMAGE}" bash /data/entrypoint.sh
+docker run -d "${DOCKER_ARGS[@]}" "${DOCKER_IMAGE}" bash /entrypoint.sh
 
 # ---- 宿主机节点 | host-side nodes -------------------------------------------
 HOST_PID_FILES=()

@@ -1,0 +1,13 @@
+<!-- fslam 模式的 Fixposition driver 启动文件(respawn 版),由
+     run_fast_lio_pgo_prod.sh 只读挂载为 /fixposition_driver.launch。
+     参数文件是 entrypoint_fslam.sh 生成的运行时副本(可被 FP_STREAM 覆盖)。
+     Static launch for the fslam-mode Fixposition driver (with respawn),
+     mounted read-only at /fixposition_driver.launch. The params file is the
+     runtime copy written by entrypoint_fslam.sh (FP_STREAM overridable). -->
+<launch>
+  <node name="fixposition_driver_ros2" pkg="fixposition_driver_ros2"
+        exec="fixposition_driver_ros2_exec" output="screen"
+        respawn="true" respawn_delay="5">
+    <param from="/data/fixposition_runtime.yaml"/>
+  </node>
+</launch>
