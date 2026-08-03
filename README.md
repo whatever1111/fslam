@@ -1,6 +1,6 @@
 # fslam — 云深处 M20 机器狗 SLAM 部署 | Deep Robotics M20 deployment
 
-基于 LIO-SLAM CI/CD 发布镜像 `wanderer123/fslam-humble:arm64` 的生产部署仓库。
+基于 LIO-SLAM CI/CD 发布镜像 `wanderer123/fslam-humble:{arm64,amd64}` 的生产部署仓库。
 狗上只需要这个 checkout + docker,不需要源码/编译。
 
 ## 部署 | Deploy
@@ -10,36 +10,61 @@
 git clone https://github.com/whatever1111/fslam.git && cd fslam
 docker pull wanderer123/fslam-humble:arm64
 
-# 启动(配置树自动从本 checkout 的 fslam/config 挂载)
+# fslam 模式(RTK + FAST-LIO-PGO)| fslam mode
 ./fslam/run_fast_lio_pgo_prod.sh
+
+# fixposition-only 模式(纯 RTK,无 SLAM)| pure RTK, no SLAM
+./fslam/run_fixposition_prod.sh
 
 # 更新 = git pull(配置/脚本) + docker pull(算法二进制)
 ```
 
-容器内启动顺序:① Fixposition driver(等 RTK/FPA 输出)→ ② canonical 管线
-(`--profile m20`,`/odom` @100Hz)→ ③ `/odom→/ODOM` 别名中继。
-宿主机轮速桥 `motion_info_to_twist.py` 若存在会自动拉起。
+### 数据流 | Data flow
 
-常用:
+两种模式对外接口一致(狗导航栈消费)| both modes expose the same dog-facing interface:
+
+| 话题 | 类型 | 来源(fslam 模式) | 来源(fp-only 模式) |
+|------|------|-------------------|---------------------|
+| `/ODOM` | nav_msgs/Odometry | canonical 管线**直出**(fusion 节点 `odom_topic:=/ODOM`,无中继) | 宿主机 `fp_to_odom.py` 中继 `/fixposition/odometry_enu` |
+| `/LOC_BODY_POINTS` | sensor_msgs/PointCloud2 | 宿主机 `fp_to_odom.py`:`/LIDAR/POINTS2` 去畸变到 base_link,时戳对齐最新 `/ODOM` | 同左 |
+| `/LOCATION_STATUS` | drdds/LocationStatus | 宿主机 `fp_to_odom.py`(与点云同戳;total_status: 0 未初始化/1 正常/2 低质量/3 丢失) | 同左 |
+
+fslam 模式容器内启动顺序:① Fixposition driver(等 RTK/FPA 输出)→ ② canonical
+管线(`--profile m20`,fusion 直出 `/ODOM` @100Hz)。宿主机自动拉起
+`motion_info_to_twist.py`(轮速桥)与 `fp_to_odom.py`(fslam 模式下
+`relay_enable:=false`,只订阅 `/ODOM` 作位姿源,不再中继)。
+
+> 直出 `/ODOM` 需要镜像内 fusion 节点带 `odom_topic` 参数(旧镜像忽略之,
+> `/ODOM` 无数据 → `--check` 可见,请 `docker pull` 更新镜像)。
+
+常用 | common:
 
 ```bash
-./fslam/run_fast_lio_pgo_prod.sh --foreground        # 前台调试
+./fslam/run_fast_lio_pgo_prod.sh --foreground          # 前台调试
 ./fslam/run_fast_lio_pgo_prod.sh --fp-stream tcpcli://<ip>:21000
-docker logs -f fslam-runtime                          # 看运行日志
-docker stop fslam-runtime && docker rm fslam-runtime  # 停止
+./fslam/run_fast_lio_pgo_prod.sh --check               # 链路体检:逐话题测频找断点
+docker logs -f fslam-runtime                           # 看运行日志
+docker stop fslam-runtime && docker rm fslam-runtime   # 停止(宿主机节点随看门狗回收)
 ```
 
-日志/录包落 `~/fslam/logs`(挂载为容器内 `/data`)。
+日志落 `fslam/logs/`(挂载为容器内 `/data`,git 忽略)。
 
 ## 目录 | Layout
 
-- `fslam/run_fast_lio_pgo_prod.sh` — 唯一启动脚本(来源:LIO-SLAM 仓库 `tools/`,勿在此直接改)
-- `fslam/config/` — canonical 三层配置(base + profiles/m20 + modes),同样来源于 LIO-SLAM 仓库
-- `fixposition/` — fixposition-only 模式(`fslam/run_fixposition_prod.sh`,纯 RTK 无 SLAM)
+- `fslam/run_fast_lio_pgo_prod.sh` — fslam 模式启动脚本(容器管线 + 宿主机节点)
+- `fslam/run_fixposition_prod.sh` — fixposition-only 模式启动脚本
+- `fslam/deploy_common.sh` — 两脚本共享的宿主机进程管理函数
+- `fslam/config/` — canonical 配置覆盖层(来源:LIO-SLAM 仓库,保持同步)
+- `fixposition/` — fp-only 模式的驱动配置(node.launch / config_fp_only.yaml / urdf)
+- `fp_to_odom.py` — 宿主机接口节点:/ODOM(fp-only 中继)+ /LOC_BODY_POINTS + /LOCATION_STATUS
 - `motion_info_to_twist.py` — 宿主机轮速桥(狗 `/MOTION_INFO` → FP 设备内部融合)
-- `legacy/` — 旧链(fp_imu_relay/字段重命名/ecef 桥时代)存档,**勿再使用**
+- `legacy/` — 旧链(fp_imu_relay/字段重命名/ecef 桥/odom 别名中继时代)存档,**勿再使用**
 
 ## 注意 | Notes
 
-- 镜像烘入 m20 profile 后,`fslam/config/` 仅作覆盖层;两边不一致时以本 checkout 为准(挂载优先)。
-- 配置改动请在 LIO-SLAM 仓库改并同步过来,保持单一事实源。
+- 所有路径均由脚本从 checkout 位置推导,可用环境变量覆盖 —— 无硬编码路径。
+  All paths derive from the checkout location (env-overridable) — no hard-coding.
+- 镜像烘入 m20 profile 后,`--config-dir` 仅作覆盖层;配置改动请在 LIO-SLAM
+  仓库改并同步过来,保持单一事实源。
+- `/LOCATION_STATUS` 子字段(exec/loss/input)语义仍待 OEM 规范确认,
+  见 `fp_to_odom.py` 顶部常量块。
