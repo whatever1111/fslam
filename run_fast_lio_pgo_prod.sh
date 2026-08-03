@@ -56,7 +56,11 @@ ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs/fslam_prod}"
 LIDAR_TOPIC="${LIDAR_TOPIC:-/LIDAR/POINTS2}"
 CYCLONEDDS_CONFIG="${CYCLONEDDS_CONFIG:-${BASE_DIR}/config/dds/cyclonedds.xml}"
-FASTDDS_CONFIG="${FASTDDS_CONFIG:-${BASE_DIR}/config/dds/fastdds.xml}"
+# 宿主机节点用 FastDDS 默认 profile(全接口):/IMU、/MOTION_INFO 来自其它 CPU
+# 单元,输出话题也要出网(见 run_fixposition_prod.sh 的实机验证注释)。
+# Host nodes run the DEFAULT FastDDS profile (all interfaces) — see the
+# field-verified DDS-split note in run_fixposition_prod.sh.
+FASTDDS_CONFIG="${FASTDDS_CONFIG:-}"
 HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-${BASE_DIR}/host/motion_info_to_twist.py}"
 FP_TO_ODOM_SCRIPT="${FP_TO_ODOM_SCRIPT:-${BASE_DIR}/host/fp_to_odom.py}"
 ENTRYPOINT="${BASE_DIR}/container/entrypoint_fslam.sh"             # 容器载荷 | container payload
@@ -170,8 +174,7 @@ EOFCHECK
   echo "== 宿主机侧 | host-side probe =="
   bash -c "source '${HOST_ROS_SETUP}' \
     && export ROS_DOMAIN_ID='${ROS_DOMAIN_ID}' RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
-    && export FASTRTPS_DEFAULT_PROFILES_FILE='${FASTDDS_CONFIG}' \
-    && printf '  %-32s ' /LOCATION_STATUS \
+    && ${FASTDDS_CONFIG:+export FASTRTPS_DEFAULT_PROFILES_FILE='${FASTDDS_CONFIG}' &&} printf '  %-32s ' /LOCATION_STATUS \
     && rate=\"\$(timeout 4 ros2 topic hz /LOCATION_STATUS 2>/dev/null | grep -m1 -oE 'average rate: [0-9.]+')\" \
     && echo \"\${rate:-无数据 | SILENT}\"" || true
   echo ""

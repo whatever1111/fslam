@@ -39,12 +39,19 @@ FIXPOSITION_CONFIG_DIR="${FIXPOSITION_CONFIG_DIR:-${BASE_DIR}/config/fixposition
 HOST_BRIDGE_SCRIPT="${HOST_BRIDGE_SCRIPT:-${BASE_DIR}/host/motion_info_to_twist.py}"
 FP_TO_ODOM_SCRIPT="${FP_TO_ODOM_SCRIPT:-${BASE_DIR}/host/fp_to_odom.py}"
 CYCLONEDDS_CONFIG="${CYCLONEDDS_CONFIG:-${BASE_DIR}/config/dds/cyclonedds.xml}"
-FASTDDS_CONFIG="${FASTDDS_CONFIG:-${BASE_DIR}/config/dds/fastdds.xml}"
-# 实机验证(ChongQing):容器/宿主机/OEM 栈全部 FastDDS + OEM 同款 profile 才稳定
-# 互通;CycloneDDS 容器与 OEM FastDDS 栈互通不可靠。CONTAINER_RMW 可切回。
-# Field-verified: FastDDS with the OEM-identical profile EVERYWHERE (container,
-# host nodes, OEM stack). CycloneDDS↔OEM-FastDDS interop was unreliable.
+# 实机验证(ChongQing_106)的 DDS 分工:
+#   容器  = FastDDS + OEM 同款白名单 profile(lo;FP 驱动只需本机消费)
+#   宿主机 = FastDDS 默认 profile(全接口)—— /IMU、/MOTION_INFO 来自其它
+#            CPU 单元,/ODOM、/LOC_BODY_POINTS、/LOCATION_STATUS 也必须出网给导航。
+#   白名单 profile 会把宿主机节点锁死在回环上(本机没有 10.21.33.x 时)。
+# Field-verified DDS split: container = OEM-identical whitelist profile
+# (loopback is all the FP driver needs); host nodes = DEFAULT profile (all
+# interfaces) — /IMU + /MOTION_INFO arrive from the other CPU units, and the
+# /ODOM triplet must leave the box for nav. The whitelist profile would pin
+# host nodes to loopback (this unit has no 10.21.33.x interface).
 CONTAINER_RMW="${CONTAINER_RMW:-rmw_fastrtps_cpp}"
+CONTAINER_FASTDDS_CONFIG="${CONTAINER_FASTDDS_CONFIG:-${BASE_DIR}/config/dds/fastdds.xml}"
+FASTDDS_CONFIG="${FASTDDS_CONFIG:-}"   # host-node profile; empty = FastDDS defaults
 ENTRYPOINT="${BASE_DIR}/container/entrypoint_fixposition.sh"   # 容器载荷 | container payload
 ENABLE_MOTION_INFO_BRIDGE="${ENABLE_MOTION_INFO_BRIDGE:-1}"
 FP_TO_ODOM_ARGS="${FP_TO_ODOM_ARGS:-}"
@@ -64,8 +71,12 @@ ENTRYPOINT="$(realpath "${ENTRYPOINT}")"
 if [[ "${ENABLE_MOTION_INFO_BRIDGE}" == "1" && ! -f "${HOST_BRIDGE_SCRIPT}" ]]; then
   echo "[ERROR] 缺桥脚本 | missing bridge script: ${HOST_BRIDGE_SCRIPT}" >&2; exit 1
 fi
-[[ -f "${CYCLONEDDS_CONFIG}" ]] || echo "[WARN] 缺 cyclonedds 配置 | missing: ${CYCLONEDDS_CONFIG}" >&2
-[[ -f "${FASTDDS_CONFIG}" ]]    || echo "[WARN] 缺 fastdds 配置 | missing: ${FASTDDS_CONFIG}" >&2
+if [[ "${CONTAINER_RMW}" == "rmw_fastrtps_cpp" && ! -f "${CONTAINER_FASTDDS_CONFIG}" ]]; then
+  echo "[WARN] 缺容器 fastdds 配置 | missing container fastdds profile: ${CONTAINER_FASTDDS_CONFIG}" >&2
+fi
+if [[ -n "${FASTDDS_CONFIG}" && ! -f "${FASTDDS_CONFIG}" ]]; then
+  echo "[WARN] 宿主机 fastdds 配置不存在 | host fastdds profile not found: ${FASTDDS_CONFIG}" >&2
+fi
 # shellcheck disable=SC2034  # 由 fslam_start_host_node 消费 | consumed by fslam_start_host_node
 HOST_ROS_SETUP="$(fslam_host_ros_setup)" \
   || { echo "[ERROR] 宿主机无 ROS2 环境 | no host ROS2 env under /opt/ros" >&2; exit 1; }
@@ -98,8 +109,8 @@ DOCKER_ARGS=(
   -v "${FIXPOSITION_CONFIG_DIR}:/fixposition_config:ro"
   -v "${LOG_DIR}:/data"
 )
-if [[ "${CONTAINER_RMW}" == "rmw_fastrtps_cpp" && -f "${FASTDDS_CONFIG}" ]]; then
-  DOCKER_ARGS+=(-e FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds.xml -v "$(realpath "${FASTDDS_CONFIG}"):/fastdds.xml:ro")
+if [[ "${CONTAINER_RMW}" == "rmw_fastrtps_cpp" && -f "${CONTAINER_FASTDDS_CONFIG}" ]]; then
+  DOCKER_ARGS+=(-e FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds.xml -v "$(realpath "${CONTAINER_FASTDDS_CONFIG}"):/fastdds.xml:ro")
 elif [[ "${CONTAINER_RMW}" == "rmw_cyclonedds_cpp" && -f "${CYCLONEDDS_CONFIG}" ]]; then
   DOCKER_ARGS+=(-e CYCLONEDDS_URI=/cyclonedds.xml -v "$(realpath "${CYCLONEDDS_CONFIG}"):/cyclonedds.xml:ro")
 fi
