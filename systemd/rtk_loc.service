@@ -1,29 +1,41 @@
+# ============================================================================
+# rtk_loc.service —— 开机自启 fixposition-only 定位链路
+#                    boot-start the fixposition-only localization chain
+# ----------------------------------------------------------------------------
+# 假设仓库克隆在 /home/user/fslam;克隆在别处则改 ExecStart 路径。
+# Assumes the repo is cloned at /home/user/fslam — adjust ExecStart otherwise.
+# 安装 | install:
+#   sudo cp systemd/rtk_loc.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rtk_loc
+# ============================================================================
 [Unit]
-Description=RTK Localization Service
+Description=RTK Localization Service (fslam fixposition-only)
 Wants=network-online.target docker.service
 After=network-online.target docker.service
+
 [Service]
-Type=simple
-# 指定运行该脚本的用户
+# 启动脚本把容器(--restart unless-stopped)和宿主机节点(setsid+看门狗)
+# 拉起后即退出 → oneshot + RemainAfterExit,状态语义才正确(active=已部署)。
+# The launcher exits after starting the container (kept alive by the docker
+# restart policy) and the setsid'd host nodes (reaped by the watcher) →
+# oneshot + RemainAfterExit gives honest status semantics (active = deployed).
+Type=oneshot
+RemainAfterExit=yes
 User=root
-# 设置工作目录，确保脚本内的相对路径能正确解析
-WorkingDirectory=/home/user/
 
-ExecStartPre=/bin/bash -c "echo '[INFO] Systemd waiting for physical network IP...'; while ! ip -4 addr show | grep -E '^[0-9]+: (eth|en)' -A 2 | grep -q 'inet '; do sleep 1; done; echo '[INFO] IP found!'"
-
-# 2. 核心大招：强制将 ROS 2 的组播网段路由指向 eth1 (如果你是用 eth0 通信，这里就改成 eth0)
-ExecStartPre=+/sbin/ip route replace 224.0.0.0/4 dev eth0
-
-# 3. 延时 2 秒让内核路由生效
+# 等物理网卡拿到 IP(FP 设备走 TCP)| wait for a physical NIC to get an IP
+ExecStartPre=/bin/bash -c "echo '[INFO] waiting for physical network IP...'; while ! ip -4 addr show | grep -E '^[0-9]+: (eth|en)' -A 2 | grep -q 'inet '; do sleep 1; done; echo '[INFO] IP found'"
+# DDS 组播路由钉到通信网卡(按实际通信网卡改 eth0)| pin the DDS multicast
+# route to the comms NIC (change eth0 to match the rig)
+ExecStartPre=/sbin/ip route replace 224.0.0.0/4 dev eth0
 ExecStartPre=/bin/sleep 2
-# 执行命令，必须使用绝对路径
-ExecStart=/bin/bash  /home/user/fslam/fslam/run_fixposition_prod.sh
-# 发生故障时自动重启
-Restart=on-failure
-# 重启间隔时间
-RestartSec=5s
 
-# 如果脚本会将日志输出到终端，systemd 会自动将其捕获到 journalctl 中
+ExecStart=/bin/bash /home/user/fslam/run_fixposition_prod.sh
+# 停止 = 收容器;宿主机节点由看门狗随之回收 | stop the container; the
+# watcher then reaps the host nodes
+ExecStop=/bin/bash -c "docker stop fixposition-runtime; docker rm fixposition-runtime; exit 0"
+TimeoutStartSec=180
+
 StandardOutput=journal
 StandardError=journal
 
