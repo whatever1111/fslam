@@ -54,7 +54,7 @@ MEM="${DOCKER_MEM_LIMIT:-24g}"
 SWAP="${DOCKER_MEM_SWAP:-28g}"
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs/fslam_prod}"
-LIDAR_TOPIC="${LIDAR_TOPIC:-/LIDAR/POINTS2}"
+LIDAR_TOPIC="${LIDAR_TOPIC:-/LIDAR/POINTS}"
 CYCLONEDDS_CONFIG="${CYCLONEDDS_CONFIG:-${BASE_DIR}/config/dds/cyclonedds.xml}"
 # 宿主机节点用 FastDDS 默认 profile(全接口):/IMU、/MOTION_INFO 来自其它 CPU
 # 单元,输出话题也要出网(见 run_fixposition_prod.sh 的实机验证注释)。

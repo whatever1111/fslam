@@ -15,7 +15,7 @@
 #       publishes /ODOM DIRECTLY (no relay hop); this node then only
 #       SUBSCRIBES to /ODOM as the pose/stamp source for the topics below.
 #   /LOC_BODY_POINTS  sensor_msgs/PointCloud2
-#       Each /LIDAR/POINTS2 scan is deskewed into base_link AT THE NEWEST
+#       Each /LIDAR/POINTS scan is deskewed into base_link AT THE NEWEST
 #       /ODOM STAMP: /IMU gyro integration for rotation + odometry body
 #       velocity for translation, per point timestamp. Its header stamp
 #       therefore equals the stamp of an actual /ODOM message (共享时间戳).
@@ -218,7 +218,7 @@ class FixpositionOdomRelay(Node):
         # OEM strips /ODOM covariance to zero — downstream expects that.
         self.declare_parameter("zero_covariance", True)
         # ---- /LOC_BODY_POINTS ----
-        self.declare_parameter("lidar_input_topic", "/LIDAR/POINTS2")
+        self.declare_parameter("lidar_input_topic", "/LIDAR/POINTS")
         self.declare_parameter("loc_body_points_topic", "/LOC_BODY_POINTS")
         self.declare_parameter("loc_body_frame_id", "base_link")
         self.declare_parameter("imu_topic", "/IMU")

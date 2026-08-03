@@ -61,8 +61,8 @@ fi
 
 # 雷达是狗自带服务,本脚本不启动 —— 缺席只能告警。
 # The lidar driver is the dog's own service, never started here — warn only.
-if ! timeout 5 ros2 topic list 2>/dev/null | grep -qx "${LIDAR_TOPIC:-/LIDAR/POINTS2}"; then
-  echo "[WARN] 未发现雷达话题 | lidar topic missing: ${LIDAR_TOPIC:-/LIDAR/POINTS2}"
+if ! timeout 5 ros2 topic list 2>/dev/null | grep -qx "${LIDAR_TOPIC:-/LIDAR/POINTS}"; then
+  echo "[WARN] 未发现雷达话题 | lidar topic missing: ${LIDAR_TOPIC:-/LIDAR/POINTS}"
 fi
 
 # ---- ② canonical 管线 | the in-image four-quadrant prod entry ---------------
