@@ -317,6 +317,7 @@ class FixpositionOdomRelay(Node):
         self._initialized = False  # first valid pose received → leaves state 0
         self._last_odom_out_mono = None
         self._last_cloud_status_mono = None
+        self._next_status_mono = None  # drift-free 1/rate schedule for cloud-synced status
         self._status_seq = 0
         self._status_period = 1.0 / status_rate if status_rate > 0.0 else 0.1
 
@@ -591,12 +592,18 @@ class FixpositionOdomRelay(Node):
         pub_ms = (time.monotonic() - t_pub) * 1e3
 
         # /LOCATION_STATUS shares the same stamp as the cloud (= newest /ODOM),
-        # throttled to location_status_rate_hz (clouds arrive faster).
+        # published at each 1/rate boundary (drift-free — a plain "elapsed >=
+        # period" gate quantized to the 0.1 s cloud grid averages ~1.8 Hz).
         if self.status_pub_ is not None:
             now_mono = time.monotonic()
-            if self._last_cloud_status_mono is None or now_mono - self._last_cloud_status_mono >= self._status_period:
+            if self._next_status_mono is None:
+                self._next_status_mono = now_mono
+            if now_mono >= self._next_status_mono:
                 self._publish_status_raw(ref_sec, ref_nsec)
                 self._last_cloud_status_mono = now_mono
+                self._next_status_mono += self._status_period
+                if now_mono >= self._next_status_mono:  # fell behind (lidar gap)
+                    self._next_status_mono = now_mono + self._status_period
 
         self.cloud_count_ += 1
         prof_str = " ".join(f"{k}={v:.1f}" for k, v in self._prof.items())
