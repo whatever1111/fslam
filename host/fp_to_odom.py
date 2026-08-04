@@ -34,7 +34,9 @@
 
 import array
 import math
+import os
 import statistics
+import sys
 import threading
 import time
 from collections import deque
@@ -58,6 +60,10 @@ try:
     HAVE_DRDDS = True
 except ImportError:  # pragma: no cover
     HAVE_DRDDS = False
+
+
+class _ReinitRequest(Exception):
+    """Raised out of rclpy.spin() to ask main() for a fresh DDS participant."""
 
 
 # =============================================================================
@@ -169,19 +175,22 @@ def rotvec_to_matrices(rotvec):
     return mats
 
 
-def deskew_points(xyz, rel_t, imu_t, imu_w, t_ref, vel_body):
+def deskew_points(xyz, rel_t, imu_t, imu_w, t_ref, vel_body, time_quantum=0.001):
     """Deskew: express every point in the base_link pose at t_ref.
 
     p_ref = R(ref→i) · p_i + v_body · (t_i − t_ref)
 
-    Optimized for mechanical lidars where points come in columns sharing a
-    timestamp: rotations are computed once per UNIQUE timestamp (~N/32 trig
-    ops instead of N) and gathered; the heavy per-point pass is a single
-    einsum in float32.
+    Rotations are computed once per UNIQUE timestamp and gathered; the heavy
+    per-point pass is a single einsum in float32. Timestamps are quantized to
+    time_quantum first (0 disables): lidars with near-per-point stamps would
+    otherwise need thousands of Rodrigues matrices per cloud, and 1 ms of
+    rotation at even 2 rad/s is only ~0.1° — far below lidar noise. The exact
+    rel_t is still used for the velocity translation term.
     xyz: (M,3); rel_t: (M,) seconds relative to t_ref;
     imu_t/imu_w: gyro history; vel_body: (3,) m/s or None. Returns (M,3) f32.
     """
-    uniq, inv = np.unique(rel_t, return_inverse=True)
+    rot_t = np.round(rel_t / time_quantum) * time_quantum if time_quantum > 0.0 else rel_t
+    uniq, inv = np.unique(rot_t, return_inverse=True)
     rotvec = integrate_gyro_rotvec(imu_t, imu_w, t_ref, t_ref + uniq)
     mats = rotvec_to_matrices(rotvec).astype(np.float32)
     pts = xyz.astype(np.float32, copy=False)
@@ -218,6 +227,14 @@ class FixpositionOdomRelay(Node):
         self.declare_parameter("retime_jump_sec", 0.5)
         # OEM strips /ODOM covariance to zero — downstream expects that.
         self.declare_parameter("zero_covariance", True)
+        # Boot-order DDS deafness self-heal (seen twice on ChongQing_106): a
+        # participant created at boot can come up never receiving from the
+        # same-host fixposition container — no source odometry, so no /ODOM at
+        # all. If NOTHING arrives within the grace window, recreate the whole
+        # process (fresh participant) — the in-process equivalent of the manual
+        # rtk_loc restart that reliably fixes it. 0 disables.
+        self.declare_parameter("boot_reinit_grace_sec", 45.0)
+        self.declare_parameter("boot_reinit_max", 5)
         # ---- /LOC_BODY_POINTS ----
         self.declare_parameter("lidar_input_topic", "/LIDAR/POINTS")
         self.declare_parameter("loc_body_points_topic", "/LOC_BODY_POINTS")
@@ -225,6 +242,8 @@ class FixpositionOdomRelay(Node):
         self.declare_parameter("imu_topic", "/IMU")
         self.declare_parameter("deskew_enable", True)
         self.declare_parameter("deskew_use_linear_velocity", True)
+        # Rotation-lookup timestamp bucket (s); 0 = exact per-unique-stamp
+        self.declare_parameter("deskew_time_quantum_sec", 0.001)
         # lidar→base extrinsic (x y z roll pitch yaw); identity on the M20 URDF
         self.declare_parameter("lidar_to_base_xyzrpy", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         # ---- /LOCATION_STATUS ----
@@ -266,6 +285,7 @@ class FixpositionOdomRelay(Node):
         imu_topic = self.get_parameter("imu_topic").value
         self.deskew_enable = bool(self.get_parameter("deskew_enable").value) and np is not None
         self.deskew_use_vel = bool(self.get_parameter("deskew_use_linear_velocity").value)
+        self.deskew_time_quantum = float(self.get_parameter("deskew_time_quantum_sec").value)
         xyzrpy = [float(v) for v in self.get_parameter("lidar_to_base_xyzrpy").value]
         status_topic = self.get_parameter("location_status_topic").value
         status_rate = float(self.get_parameter("location_status_rate_hz").value)
@@ -385,6 +405,33 @@ class FixpositionOdomRelay(Node):
         self._prof = {}  # per-cloud stage timings (ms), worker thread only
         self._worker = threading.Thread(target=self._cloud_worker, name="deskew_worker", daemon=True)
         self._worker.start()
+
+        self.reinit_max_ = int(self.get_parameter("boot_reinit_max").value)
+        self._reinit_grace = float(self.get_parameter("boot_reinit_grace_sec").value)
+        self._reinit_attempt = int(os.environ.get("FP_REINIT_ATTEMPT", "0"))
+        self._start_mono = time.monotonic()
+        if self._reinit_grace > 0:
+            self._reinit_timer_ = self.create_timer(5.0, self._reinit_check_cb)
+
+    def _reinit_check_cb(self):
+        """Boot-order deafness watchdog — see boot_reinit_grace_sec above."""
+        if self.message_count_ > 0:
+            self._reinit_timer_.cancel()
+            return
+        if time.monotonic() - self._start_mono <= self._reinit_grace:
+            return
+        if self._reinit_attempt >= self.reinit_max_:
+            self.get_logger().error(
+                f"Still no source odometry after {self.reinit_max_} participant recreations — "
+                "giving up self-heal; check the fixposition container and DDS"
+            )
+            self._reinit_timer_.cancel()
+            return
+        self.get_logger().warn(
+            f"No source odometry within {self._reinit_grace:g} s of startup — recreating DDS "
+            f"participant (boot-order deafness workaround, attempt {self._reinit_attempt + 1}/{self.reinit_max_})"
+        )
+        raise _ReinitRequest()
 
     def stop(self):
         with self._cloud_cond:
@@ -664,7 +711,7 @@ class FixpositionOdomRelay(Node):
             xyz = (xyz @ rot.T.astype(np.float32)) + trans.astype(np.float32)
         prof["xyz"] = (time.monotonic() - m) * 1e3
         m = time.monotonic()
-        out_xyz = deskew_points(xyz, rel_t, imu_t, imu_w, t_ref, vel)
+        out_xyz = deskew_points(xyz, rel_t, imu_t, imu_w, t_ref, vel, self.deskew_time_quantum)
         prof["math"] = (time.monotonic() - m) * 1e3
         m = time.monotonic()
         arr['x'] = out_xyz[:, 0]
@@ -762,8 +809,14 @@ class FixpositionOdomRelay(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = FixpositionOdomRelay()
+    attempt = int(os.environ.get("FP_REINIT_ATTEMPT", "0"))
+    if attempt:
+        node.get_logger().warn(f"Process restarted by deafness self-heal (attempt {attempt}/{node.reinit_max_})")
+    reinit = False
     try:
         rclpy.spin(node)
+    except _ReinitRequest:
+        reinit = True
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
@@ -773,6 +826,12 @@ def main(args=None):
             rclpy.shutdown()
         except Exception:
             pass
+    if reinit:
+        # execv keeps the PID (launcher pidfile stays valid) and the log fds;
+        # everything DDS-related is rebuilt from scratch in the new image.
+        os.environ["FP_REINIT_ATTEMPT"] = str(attempt + 1)
+        time.sleep(2.0)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 if __name__ == "__main__":
