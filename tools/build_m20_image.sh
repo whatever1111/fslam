@@ -14,6 +14,7 @@
 #   tools/build_m20_image.sh --source /path/to/fixposition_driver
 #   BASE_IMAGE=wanderer123/fslam-humble:arm64 tools/build_m20_image.sh
 #   BUILD_JOBS=0 tools/build_m20_image.sh          # 专用构建机:放开并行度
+#   BUILD_CPUS=3 BUILD_JOBS=1 tools/build_m20_image.sh   # 狗上:钉单核,保住 ssh
 #
 # 产物 | result: 本地镜像 fslam-m20:<arch>  (不推 registry | not pushed anywhere)
 # ============================================================================
@@ -30,6 +31,15 @@ BASE_IMAGE="${BASE_IMAGE:-wanderer123/fslam-humble:$(fslam_arch_tag)}"
 # On the robot this compiles alongside live localization: keep parallelism low
 # so sshd and the localization keep their share (see Dockerfile.m20).
 BUILD_JOBS="${BUILD_JOBS:-2}"
+# 把构建钉在指定核上,别和定位/sshd 抢 CPU。狗上必设(如 BUILD_CPUS=3):106 空载
+# 就已经 load≈3.3/4 核,一旦 ssh 卡死,现场会以为机器死了直接断电重启,构建也就没了。
+# --cpuset-cpus 只有传统构建器认,所以设了就关掉 BuildKit。
+# Pin the build to specific cores so it does not fight the localization or sshd.
+# Required on the robot (e.g. BUILD_CPUS=3): 106 idles at load ~3.3 on 4 cores,
+# and once ssh stops answering the box looks dead and gets power-cycled, taking
+# the build with it. --cpuset-cpus is honoured only by the legacy builder, so
+# setting it turns BuildKit off.
+BUILD_CPUS="${BUILD_CPUS:-}"
 IMAGE_TAG="${IMAGE_TAG:-fslam-m20:$(fslam_arch_tag)}"
 SOURCE_DIR=""
 
@@ -70,7 +80,13 @@ cp "${BASE_DIR}/container/Dockerfile.m20" "${WORK_DIR}/Dockerfile"
 
 # ---- 构建 | build -----------------------------------------------------------
 echo "[INFO] 构建 ${IMAGE_TAG}(base ${BASE_IMAGE}, driver ${DRIVER_REF}, jobs ${BUILD_JOBS})..."
-docker build \
+DOCKER_BUILD_ARGS=()
+if [[ -n "${BUILD_CPUS}" ]]; then
+  export DOCKER_BUILDKIT=0
+  DOCKER_BUILD_ARGS+=(--cpuset-cpus "${BUILD_CPUS}")
+  echo "[INFO] 限核 | pinned to CPUs ${BUILD_CPUS} (BuildKit off so --cpuset-cpus applies)"
+fi
+docker build "${DOCKER_BUILD_ARGS[@]}" \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
   --build-arg "BUILD_JOBS=${BUILD_JOBS}" \
   --label "fslam.m20.driver_ref=${DRIVER_REF}" \
