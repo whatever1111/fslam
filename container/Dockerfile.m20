@@ -51,9 +51,46 @@ COPY fixposition_driver /root/ros2_ws/src/fixposition_driver
 # LIBRARY_PATH —— 因此先单独构建它再构建其余(与 LIO-SLAM 基础镜像同样的处理)。
 # fixposition_driver_lib is a cmake-only package exporting a bare library name,
 # so downstream linking needs LIBRARY_PATH: build it first, then the rest.
+# 狗上那份基础镜像(2026-07-02 构建)只留了 fpsdk 的 .so,头文件和 cmake 配置都
+# 被剥掉了,而 3f75c62 的 driver 需要 find_package(fpsdk_common)。所以这里从固定
+# 的 SDK 源码(c98018a,正是 driver 所指的那个 commit)自己编一份装进 /usr/local:
+# driver 和 SDK 同源,不存在 ABI 对不上的风险。PROJ 是可选的,关掉;
+# nlohmann_json 镜像里没有,但它是 header-only,随源码一起带进来。
+# The robot's base image (built 2026-07-02) kept only fpsdk's .so files — headers
+# and cmake configs were stripped — while the 3f75c62 driver needs
+# find_package(fpsdk_common). So build the SDK here from its pinned source
+# (c98018a, exactly the commit the driver points at) and install it into
+# /usr/local: driver and SDK then come from one source, with no ABI guesswork.
+# PROJ is optional and switched off; nlohmann_json is absent from the image but
+# header-only, so it ships with the context.
+RUN if [ -d /root/ros2_ws/src/fixposition_driver/fixposition-sdk ]; then \
+      mkdir -p /usr/local/include/nlohmann /usr/local/lib/cmake/nlohmann_json \
+      && cp /root/ros2_ws/src/fixposition_driver/fixposition-sdk/json.hpp /usr/local/include/nlohmann/json.hpp \
+      && printf '%s\n' \
+         'add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)' \
+         'set_target_properties(nlohmann_json::nlohmann_json PROPERTIES' \
+         '  INTERFACE_INCLUDE_DIRECTORIES "/usr/local/include")' \
+         'set(nlohmann_json_FOUND TRUE)' \
+         > /usr/local/lib/cmake/nlohmann_json/nlohmann_jsonConfig.cmake; \
+    fi
+
 RUN source /opt/ros/humble/setup.bash \
     && cd /root/ros2_ws \
-    && rm -rf src/fixposition_driver/fixposition-sdk src/fixposition_driver/fixposition_driver_ros1 \
+    && if [ -d src/fixposition_driver/fixposition-sdk ]; then \
+         mv src/fixposition_driver/fixposition-sdk /tmp/fpsdk \
+         && cmake -S /tmp/fpsdk -B /tmp/fpsdk/build \
+              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+              -DFPSDK_USE_PROJ=OFF -DFPSDK_USE_ROS2=ON -DBUILD_TESTING=OFF \
+         && cmake --build /tmp/fpsdk/build --parallel "${BUILD_JOBS:-2}" \
+         && cmake --install /tmp/fpsdk/build \
+         && ldconfig \
+         && rm -rf /tmp/fpsdk; \
+       fi \
+    && test -f /usr/local/lib/cmake/fpsdk_common/fpsdk_commonConfig.cmake
+
+RUN source /opt/ros/humble/setup.bash \
+    && cd /root/ros2_ws \
+    && rm -rf src/fixposition_driver/fixposition_driver_ros1 \
     && if [ "${BUILD_JOBS}" != "0" ]; then \
          JOBS="--parallel-workers ${BUILD_JOBS}"; export MAKEFLAGS="-j${BUILD_JOBS}"; \
        else JOBS=""; fi \
