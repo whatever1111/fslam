@@ -18,6 +18,16 @@
 ARG BASE_IMAGE=wanderer123/fslam-humble:arm64
 FROM ${BASE_IMAGE}
 
+# 并行度上限。狗上要一边跑定位一边编译,吃满所有核会把 sshd 和定位一起饿死
+# (实测:满并行编译期间 106 的 ssh 握手超时、/ODOM 掉到 1.3 Hz)。默认留有余量,
+# 在专门的构建机上可以 --build-arg BUILD_JOBS=0 放开。
+# Parallelism cap. On the robot this compiles while localization keeps running,
+# and saturating every core starves both sshd and the localization (observed on
+# 106: ssh banner timeouts and /ODOM down to 1.3 Hz during a full-parallel
+# build). The default leaves headroom; pass --build-arg BUILD_JOBS=0 on a
+# dedicated build machine to let it use everything.
+ARG BUILD_JOBS=2
+
 SHELL ["/bin/bash", "-c"]
 
 # 先清掉基础镜像里可能残留的 driver 源码 —— 不同基础镜像放法不一样(有的是
@@ -44,12 +54,15 @@ COPY fixposition_driver /root/ros2_ws/src/fixposition_driver
 RUN source /opt/ros/humble/setup.bash \
     && cd /root/ros2_ws \
     && rm -rf src/fixposition_driver/fixposition-sdk src/fixposition_driver/fixposition_driver_ros1 \
-    && colcon build \
+    && if [ "${BUILD_JOBS}" != "0" ]; then \
+         JOBS="--parallel-workers ${BUILD_JOBS}"; export MAKEFLAGS="-j${BUILD_JOBS}"; \
+       else JOBS=""; fi \
+    && nice -n 10 colcon build ${JOBS} \
        --packages-select fixposition_driver_lib \
        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
     && source install/setup.bash \
     && export LIBRARY_PATH=/root/ros2_ws/install/fixposition_driver_lib/lib:${LIBRARY_PATH:-} \
-    && colcon build \
+    && nice -n 10 colcon build ${JOBS} \
        --packages-select rtcm_msgs fixposition_driver_msgs drdds fixposition_driver_m20 fixposition_driver_ros2 \
        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
     && rm -rf build log src/fixposition_driver

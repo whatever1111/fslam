@@ -13,6 +13,7 @@
 #   tools/build_m20_image.sh                      # clone/update, then build
 #   tools/build_m20_image.sh --source /path/to/fixposition_driver
 #   BASE_IMAGE=wanderer123/fslam-humble:arm64 tools/build_m20_image.sh
+#   BUILD_JOBS=0 tools/build_m20_image.sh          # 专用构建机:放开并行度
 #
 # 产物 | result: 本地镜像 fslam-m20:<arch>  (不推 registry | not pushed anywhere)
 # ============================================================================
@@ -25,6 +26,10 @@ source "${BASE_DIR}/lib/deploy_common.sh"
 DRIVER_REPO="${DRIVER_REPO:-https://github.com/whatever1111/fixposition_driver.git}"
 DRIVER_BRANCH="${DRIVER_BRANCH:-m20}"
 BASE_IMAGE="${BASE_IMAGE:-wanderer123/fslam-humble:$(fslam_arch_tag)}"
+# 狗上是边跑定位边编译 —— 并行度留余量,别把 sshd 和定位饿死(见 Dockerfile.m20)。
+# On the robot this compiles alongside live localization: keep parallelism low
+# so sshd and the localization keep their share (see Dockerfile.m20).
+BUILD_JOBS="${BUILD_JOBS:-2}"
 IMAGE_TAG="${IMAGE_TAG:-fslam-m20:$(fslam_arch_tag)}"
 SOURCE_DIR=""
 
@@ -64,9 +69,10 @@ done
 cp "${BASE_DIR}/container/Dockerfile.m20" "${WORK_DIR}/Dockerfile"
 
 # ---- 构建 | build -----------------------------------------------------------
-echo "[INFO] 构建 ${IMAGE_TAG}(base ${BASE_IMAGE}, driver ${DRIVER_REF})..."
+echo "[INFO] 构建 ${IMAGE_TAG}(base ${BASE_IMAGE}, driver ${DRIVER_REF}, jobs ${BUILD_JOBS})..."
 docker build \
   --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+  --build-arg "BUILD_JOBS=${BUILD_JOBS}" \
   --label "fslam.m20.driver_ref=${DRIVER_REF}" \
   -t "${IMAGE_TAG}" \
   "${WORK_DIR}"
