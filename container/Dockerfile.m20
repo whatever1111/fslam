@@ -63,6 +63,11 @@ COPY fixposition_driver /root/ros2_ws/src/fixposition_driver
 # /usr/local: driver and SDK then come from one source, with no ABI guesswork.
 # PROJ is optional and switched off; nlohmann_json is absent from the image but
 # header-only, so it ships with the context.
+# ldconfig 用 `|| true`:基础镜像里的 libgtsam.so.4 不是符号链接,ldconfig 会为此
+# 报警并返回非零,把整条 && 链带崩 —— 那是镜像自带的问题,与本层无关。
+# ldconfig is wrapped in `|| true`: the base image ships libgtsam.so.4 as a real
+# file rather than a symlink, so ldconfig warns and exits non-zero, which would
+# break the && chain. That is a pre-existing image quirk, unrelated to this layer.
 RUN if [ -d /root/ros2_ws/src/fixposition_driver/fixposition-sdk ]; then \
       mkdir -p /usr/local/include/nlohmann /usr/local/lib/cmake/nlohmann_json \
       && cp /root/ros2_ws/src/fixposition_driver/fixposition-sdk/json.hpp /usr/local/include/nlohmann/json.hpp \
@@ -83,7 +88,7 @@ RUN source /opt/ros/humble/setup.bash \
               -DFPSDK_USE_PROJ=OFF -DFPSDK_USE_ROS2=ON -DBUILD_TESTING=OFF \
          && cmake --build /tmp/fpsdk/build --parallel "${BUILD_JOBS:-2}" \
          && cmake --install /tmp/fpsdk/build \
-         && ldconfig \
+         && { ldconfig || true; } \
          && rm -rf /tmp/fpsdk; \
        fi \
     && test -f /usr/local/lib/cmake/fpsdk_common/fpsdk_commonConfig.cmake
