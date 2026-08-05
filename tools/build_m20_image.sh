@@ -80,7 +80,17 @@ cp "${BASE_DIR}/container/Dockerfile.m20" "${WORK_DIR}/Dockerfile"
 
 # ---- 构建 | build -----------------------------------------------------------
 echo "[INFO] 构建 ${IMAGE_TAG}(base ${BASE_IMAGE}, driver ${DRIVER_REF}, jobs ${BUILD_JOBS})..."
-DOCKER_BUILD_ARGS=()
+# 每个 RUN 步都会建一对 veth 再删掉,而建删网卡要拿 RTNL 锁 —— 狗上实测 sshd
+# 子进程正卡在 netlink_dump_start(D 状态,几分钟),连接因此收不到 banner。
+# 本次构建根本不需要网络(源码都在本地,不装包),所以直接 --network none:
+# 只有 loopback,不建 veth,也不会有 DDS 流量打扰正在跑的定位。
+# Every RUN step creates and destroys a veth pair, and interface churn takes the
+# RTNL lock — on the robot sshd children were observed stuck in
+# netlink_dump_start (D state, minutes), which is why connections got no banner.
+# This build needs no network at all (sources are local, nothing is installed),
+# so --network none: loopback only, no veth, and no DDS traffic to disturb the
+# running localization.
+DOCKER_BUILD_ARGS=(--network none)
 if [[ -n "${BUILD_CPUS}" ]]; then
   export DOCKER_BUILDKIT=0
   DOCKER_BUILD_ARGS+=(--cpuset-cpus "${BUILD_CPUS}")
