@@ -91,7 +91,8 @@ RUN source /opt/ros/humble/setup.bash \
          && { ldconfig || true; } \
          && rm -rf /tmp/fpsdk; \
        fi \
-    && test -f /usr/local/lib/cmake/fpsdk_common/fpsdk_commonConfig.cmake
+    && test -f /usr/local/lib/cmake/fpsdk_common/fpsdk_common-config.cmake \
+    && test -f /usr/local/lib/cmake/fpsdk_ros2/fpsdk_ros2-config.cmake
 
 RUN source /opt/ros/humble/setup.bash \
     && cd /root/ros2_ws \
