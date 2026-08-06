@@ -35,14 +35,18 @@ ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs/m20}"
 FIXPOSITION_CONFIG_DIR="${FIXPOSITION_CONFIG_DIR:-${BASE_DIR}/config/fixposition}"
 ENTRYPOINT="${BASE_DIR}/container/entrypoint_m20.sh"
-# DDS:默认 profile(全接口)。M20 模块要收 103 的 /LIDAR/POINTS、别的 CPU 的
-# /IMU 与 /MOTION_INFO,还要把三话题发给导航 —— OEM 白名单 profile 只留 lo +
-# 10.21.33.x,会把这些全挡掉。留空即用 FastDDS 默认。
-# DDS: default profile (all interfaces). The M20 module has to receive
-# /LIDAR/POINTS from CPU 103 and /IMU + /MOTION_INFO from the other units, and
-# its three topics have to reach the navigation stack. The OEM whitelist
-# profile (lo + 10.21.33.x only) would cut all of that off. Empty = defaults.
-FASTDDS_CONFIG="${FASTDDS_CONFIG:-}"
+# DDS:必须用 OEM 同款传输参数,否则收不到雷达。/LIDAR/POINTS 是 ~2 MB 的合并点云,
+# 按 maxMessageSize 65500 拆成几十个分片;默认 profile 的收包缓冲(~64 KB)装不下,
+# 实测连 publisher 都发现不了(pubs=0),而用 OEM 传输参数同一时刻能看到 10 Hz。
+# 本 profile 在 OEM 参数基础上把 10.21.31.106 也加进白名单,这样 /IMU、/MOTION_INFO
+# 进得来、三话题也出得去。
+# DDS: the OEM transport settings are mandatory or the lidar never arrives.
+# /LIDAR/POINTS is a ~2 MB merged cloud fragmented at maxMessageSize 65500; the
+# default profile's ~64 KB receive buffers cannot hold it, and measurably fail to
+# even discover the publisher (pubs=0) while the OEM settings see 10 Hz at the
+# same moment. This profile adds 10.21.31.106 to the OEM whitelist so /IMU and
+# /MOTION_INFO come in and the three output topics get out.
+FASTDDS_CONFIG="${FASTDDS_CONFIG:-${BASE_DIR}/config/dds/fastdds_m20.xml}"
 
 # ---- 预检 | pre-checks ------------------------------------------------------
 command -v docker >/dev/null 2>&1 || { echo "[ERROR] docker 不可用 | docker not available" >&2; exit 1; }

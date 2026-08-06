@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- M20 模式容器用的 DDS profile:传输参数与 OEM /opt/robot/fastdds.xml 一致
+     (8 MB 收发缓冲 + 500 MB SHM + useBuiltinTransports=false),但网卡白名单加上
+     了站点网 10.21.31.106。OEM 传输参数是收 /LIDAR/POINTS 的前提。
+     DDS profile for the M20 container: transports identical to the OEM's
+     /opt/robot/fastdds.xml (8 MB buffers, 500 MB SHM, no builtin transports),
+     with the site-network address added to the whitelist. The OEM transport
+     settings are what make /LIDAR/POINTS receivable at all. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <transport_descriptors>
+        <transport_descriptor>
+            <transport_id>udp_transport</transport_id>
+            <type>UDPv4</type>
+            <!-- 三个地址缺一不可:10.21.33.106 收雷达(103 发的 2 MB 点云),
+                 10.21.31.106 收 /IMU 与 /MOTION_INFO 并把三话题发给导航,
+                 127.0.0.1 走本机。少了 .31 就得改用默认 profile,而默认 profile
+                 的 64 KB 收包缓冲装不下 2 MB 点云 —— 实测连 publisher 都发现不了。
+                 All three are required: 10.21.33.106 receives the lidar (103 sends
+                 2 MB clouds), 10.21.31.106 receives /IMU and /MOTION_INFO and
+                 carries the three output topics to navigation, 127.0.0.1 is local.
+                 Dropping .31 forces the default profile, whose ~64 KB receive
+                 buffers cannot hold a 2 MB cloud — measured: it does not even
+                 discover the publisher. -->
+            <interfaceWhiteList>
+                <address>10.21.33.106</address>
+                <address>10.21.31.106</address>
+                <address>127.0.0.1</address>
+            </interfaceWhiteList>
+            <sendBufferSize>8388608</sendBufferSize>
+            <receiveBufferSize>8388608</receiveBufferSize>
+            <maxMessageSize>65500</maxMessageSize>
+            <non_blocking_send>true</non_blocking_send>
+        </transport_descriptor>
+
+        <transport_descriptor>
+            <transport_id>shm_transport</transport_id>
+            <type>SHM</type>
+            <segment_size>500000000</segment_size>
+        </transport_descriptor>
+    </transport_descriptors>
+
+    <participant profile_name="ros2_daemon" is_default_profile="true">
+        <rtps>
+            <builtin>
+                <discovery_config>
+                    <discoveryProtocol>SIMPLE</discoveryProtocol>
+                    <EDP>SIMPLE</EDP>
+                    <simpleEDP>
+                        <PUBWRITER_SUBREADER>true</PUBWRITER_SUBREADER>
+                        <PUBREADER_SUBWRITER>true</PUBREADER_SUBWRITER>
+                    </simpleEDP>
+                </discovery_config>
+            </builtin>
+
+            <userTransports>
+                <transport_id>udp_transport</transport_id>
+                <transport_id>shm_transport</transport_id>
+            </userTransports>
+            <useBuiltinTransports>false</useBuiltinTransports>
+        </rtps>
+    </participant>
+</profiles>
