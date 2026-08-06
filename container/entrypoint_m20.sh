@@ -35,7 +35,11 @@ trap cleanup SIGINT SIGTERM
 # 镜像自检:叠加层没生效就早点炸,别等到现场查话题。
 # Fail loudly here rather than during a field debug session if the M20 layer is
 # missing from this image.
-if ! ros2 pkg list | grep -qx "fixposition_driver_m20"; then
+# 不能用 `ros2 pkg list | grep -q`:pipefail 下 grep -q 提前退出会让 ros2 收到
+# BrokenPipe 而"失败",导致这条检查随机误报(实测踩中)。
+# Not `ros2 pkg list | grep -q`: under pipefail, grep -q's early exit gives ros2
+# a BrokenPipeError and the pipeline randomly "fails" (bitten in production).
+if ! ros2 pkg prefix fixposition_driver_m20 > /dev/null 2>&1; then
   echo "[ERROR] 镜像里没有 fixposition_driver_m20 —— 用 tools/build_m20_image.sh 构建的镜像吗?" >&2
   echo "[ERROR] fixposition_driver_m20 is not in this image; was it built by tools/build_m20_image.sh?" >&2
   exit 1
