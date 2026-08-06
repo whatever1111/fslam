@@ -47,6 +47,13 @@ ENTRYPOINT="${BASE_DIR}/container/entrypoint_m20.sh"
 # same moment. This profile adds 10.21.31.106 to the OEM whitelist so /IMU and
 # /MOTION_INFO come in and the three output topics get out.
 FASTDDS_CONFIG="${FASTDDS_CONFIG:-${BASE_DIR}/config/dds/fastdds_m20.xml}"
+# 点云中继(见 container/cloud_relay_in.py 头注释):纯环回 profile 收 OEM 的
+# /LIDAR/POINTS,再在驱动 profile 上重发为 /M20/LIDAR_POINTS。
+# Cloud relay (header of container/cloud_relay_in.py): a loopback-only profile
+# receives the OEM /LIDAR/POINTS and republishes it on the driver profile.
+FASTDDS_LO_CONFIG="${FASTDDS_LO_CONFIG:-${BASE_DIR}/config/dds/fastdds_lo.xml}"
+CLOUD_RELAY_IN="${BASE_DIR}/container/cloud_relay_in.py"
+CLOUD_RELAY_OUT="${BASE_DIR}/container/cloud_relay_out.py"
 
 # ---- 预检 | pre-checks ------------------------------------------------------
 command -v docker >/dev/null 2>&1 || { echo "[ERROR] docker 不可用 | docker not available" >&2; exit 1; }
@@ -63,6 +70,9 @@ ENTRYPOINT="$(realpath "${ENTRYPOINT}")"
 if [[ -n "${FASTDDS_CONFIG}" && ! -f "${FASTDDS_CONFIG}" ]]; then
   echo "[WARN] fastdds 配置不存在 | fastdds profile not found: ${FASTDDS_CONFIG}" >&2
 fi
+for f in "${FASTDDS_LO_CONFIG}" "${CLOUD_RELAY_IN}" "${CLOUD_RELAY_OUT}"; do
+  [[ -f "$f" ]] || echo "[WARN] 点云中继文件缺失,lidar 输入将为 0 | cloud relay file missing: $f" >&2
+done
 
 mkdir -p "${LOG_DIR}"
 LOG_DIR="$(realpath "${LOG_DIR}")"
@@ -111,6 +121,13 @@ DOCKER_ARGS=(
 )
 if [[ -n "${FASTDDS_CONFIG}" && -f "${FASTDDS_CONFIG}" ]]; then
   DOCKER_ARGS+=(-e FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds.xml -v "$(realpath "${FASTDDS_CONFIG}"):/fastdds.xml:ro")
+fi
+if [[ -f "${FASTDDS_LO_CONFIG}" && -f "${CLOUD_RELAY_IN}" && -f "${CLOUD_RELAY_OUT}" ]]; then
+  DOCKER_ARGS+=(
+    -v "$(realpath "${FASTDDS_LO_CONFIG}"):/fastdds_lo.xml:ro"
+    -v "$(realpath "${CLOUD_RELAY_IN}"):/cloud_relay_in.py:ro"
+    -v "$(realpath "${CLOUD_RELAY_OUT}"):/cloud_relay_out.py:ro"
+  )
 fi
 
 echo "[INFO] Starting ${CONTAINER_NAME} (${DOCKER_IMAGE})..."

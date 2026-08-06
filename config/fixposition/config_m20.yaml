@@ -70,7 +70,13 @@
             retime_to_host_clock: true      # PTP 正常时是 no-op,失锁时兜底
             retime_jump_sec: 0.5
 
-            lidar_topic: "/LIDAR/POINTS"
+            # 不直接订 /LIDAR/POINTS:OEM 点云 writer 在 127.0.0.1-only participant 上,
+            # 驱动的多网卡 participant 发现不了(FastDDS 2.6 不通告环回 locator)。
+            # entrypoint 里的 cloud_relay_{in,out}.py 把它桥接成 /M20/LIDAR_POINTS。
+            # Not /LIDAR/POINTS directly: the OEM cloud writer sits on a
+            # loopback-only participant invisible to this driver's multi-interface
+            # participant; the relay pair in the entrypoint bridges it here.
+            lidar_topic: "/M20/LIDAR_POINTS"
             imu_topic: "/IMU"
             motion_info_topic: "/MOTION_INFO"
 
