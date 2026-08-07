@@ -38,7 +38,7 @@ ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 [[ -f "${WS}/install/setup.bash" ]] \
   || { echo "[ERROR] 工作区没编 | workspace not built: ${WS}" >&2
        echo "[ERROR] 先编译 | build it first: tools/build_m20_foxy.sh --source <driver checkout>" >&2; exit 1; }
-for f in node.launch config_m20.yaml robot.urdf; do
+for f in config_m20.yaml robot.urdf; do
   [[ -f "${FIXPOSITION_CONFIG_DIR}/${f}" ]] \
     || { echo "[ERROR] 配置缺失 | missing config: ${FIXPOSITION_CONFIG_DIR}/${f}" >&2; exit 1; }
 done
@@ -78,9 +78,19 @@ export LD_LIBRARY_PATH="${SDK_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 export ROS_DOMAIN_ID
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
 
+# 直接起可执行文件,不走 node.launch:各版本的 launch XML 方言不一样(Foxy 的
+# launch_xml 不认 ros_args / respawn 这些 Galactic 以后才加的属性,会直接
+# InvalidLaunchFileError)。配置用 /** 通配,--params-file 一样能进去;进程守护
+# 由 systemd 的 Restart= 负责,不需要 launch 的 respawn。
+# Run the executable directly rather than via node.launch: the launch XML dialect
+# differs across distros (Foxy's launch_xml rejects ros_args / respawn, which are
+# Galactic+, with InvalidLaunchFileError). The config is keyed on /** so
+# --params-file works identically, and systemd's Restart= supervises the process,
+# so launch's respawn is not needed.
 echo "[INFO] 启动 M20 驱动(Foxy 原生)| starting the M20 driver (native Foxy)..."
-ros2 launch "${FIXPOSITION_CONFIG_DIR}/node.launch" \
-  config:="${FIXPOSITION_CONFIG_DIR}/config_m20.yaml" \
+ros2 run fixposition_driver_ros2 fixposition_driver_ros2_exec \
+  --ros-args -r __node:=fixposition_driver_ros2 \
+  --params-file "${FIXPOSITION_CONFIG_DIR}/config_m20.yaml" \
   > "${LOG_DIR}/fixposition.log" 2>&1 &
 DRIVER_PID=$!
 echo "${DRIVER_PID}" > "${LOG_DIR}/driver.pid"
