@@ -70,14 +70,14 @@
             retime_to_host_clock: true      # PTP 正常时是 no-op,失锁时兜底
             retime_jump_sec: 0.5
 
+            # OEM 的点云 writer 绑在 127.0.0.1-only 的 participant 上。Foxy(FastDDS 2.0)
+            # 会连同环回 locator 一起通告,所以宿主机原生跑就能直接收到;Humble(2.6)不会,
+            # 容器里这一路永远收不到 —— 这就是 M20 走 Foxy 原生部署的原因。见驱动仓库 DISTRO.md。
+            # The OEM cloud writer is bound to a loopback-only participant. Foxy (Fast DDS
+            # 2.0) announces a loopback locator alongside real NICs, so a native host
+            # process just receives it; Humble (2.6) does not, and never sees this topic
+            # from a container. That is why M20 deploys natively on Foxy — see DISTRO.md.
             lidar_topic: "/LIDAR/POINTS"
-            # 必须为 true:OEM 点云 writer 在 127.0.0.1-only participant 上,驱动的
-            # 多网卡 participant 永远发现不了(FastDDS 2.6 不通告环回 locator);
-            # 驱动会为这一路输入单开一个纯环回 participant(LoCloudReader)。
-            # Must be true: the OEM cloud writer sits on a loopback-only participant
-            # the driver's multi-interface participant can never discover; the driver
-            # opens a dedicated loopback-only participant for this one input.
-            lidar_lo_participant: true
             imu_topic: "/IMU"
             motion_info_topic: "/MOTION_INFO"
 

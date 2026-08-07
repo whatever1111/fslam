@@ -100,3 +100,19 @@ fslam_stop_previous() {
     fslam_stop_pidfile "${f}"
   done
 }
+
+# 每个 ROS 版本对应驱动仓库的一个分支 —— 驱动源码是跨版本可移植的,但打包方式不同
+# (drdds 是系统包还是 vendored、SDK 要不要删 bagwriter、容器还是原生)。
+# 只在这里维护这张表,别在各个脚本里各写一份。
+# One driver branch per ROS distro: the driver sources are distro-portable, but the
+# packaging is not (system vs vendored drdds, SDK bagwriter removal, container vs
+# native). Keep this mapping here only — do not duplicate it across scripts.
+fslam_driver_branch() {
+  local distro="${1:-${ROS_DISTRO:-}}"
+  case "${distro}" in
+    foxy)   echo m20-foxy ;;
+    humble) echo m20-humble ;;
+    jazzy)  echo m20-jazzy ;;
+    *)      return 1 ;;
+  esac
+}

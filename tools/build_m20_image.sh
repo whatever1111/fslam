@@ -25,7 +25,8 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${BASE_DIR}/lib/deploy_common.sh"
 
 DRIVER_REPO="${DRIVER_REPO:-https://github.com/whatever1111/fixposition_driver.git}"
-DRIVER_BRANCH="${DRIVER_BRANCH:-m20}"
+# 容器版走 Humble | the container build is Humble
+DRIVER_BRANCH="${DRIVER_BRANCH:-$(fslam_driver_branch humble)}"
 BASE_IMAGE="${BASE_IMAGE:-wanderer123/fslam-humble:$(fslam_arch_tag)}"
 # 狗上是边跑定位边编译 —— 并行度留余量,别把 sshd 和定位饿死(见 Dockerfile.m20)。
 # On the robot this compiles alongside live localization: keep parallelism low
