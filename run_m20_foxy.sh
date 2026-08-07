@@ -96,10 +96,21 @@ DRIVER_PID=$!
 echo "${DRIVER_PID}" > "${LOG_DIR}/driver.pid"
 
 # robot_state_publisher:用预展开的 URDF —— 狗上 Foxy 没装 xacro,而且没有公网可装。
+# Foxy 的 rcl 不接受含换行的 -p 值(整段 URDF 直接撞
+# "Couldn't parse parameter override rule",rsp 起来就死)—— 生成 params 文件传入。
 # robot_state_publisher: uses the pre-expanded URDF — the robot's Foxy has no xacro
-# package and no internet to install one.
+# package and no internet to install one. Foxy's rcl rejects -p values containing
+# newlines (a whole URDF trips "Couldn't parse parameter override rule" and rsp
+# dies on startup), so the URDF goes in through a generated params file instead.
+RSP_PARAMS="${LOG_DIR}/rsp_params.yaml"
+{
+  echo "robot_state_publisher:"
+  echo "  ros__parameters:"
+  echo "    robot_description: |"
+  sed 's/^/      /' "${FIXPOSITION_CONFIG_DIR}/robot.urdf"
+} > "${RSP_PARAMS}"
 ros2 run robot_state_publisher robot_state_publisher \
-  --ros-args -p robot_description:="$(cat "${FIXPOSITION_CONFIG_DIR}/robot.urdf")" \
+  --ros-args --params-file "${RSP_PARAMS}" \
   > "${LOG_DIR}/robot_state_publisher.log" 2>&1 &
 echo "$!" > "${LOG_DIR}/rsp.pid"
 
@@ -108,6 +119,12 @@ if ! kill -0 "${DRIVER_PID}" 2>/dev/null; then
   echo "[ERROR] 驱动起来就死了,看日志 | driver died on startup, see ${LOG_DIR}/fixposition.log" >&2
   tail -20 "${LOG_DIR}/fixposition.log" >&2 || true
   exit 1
+fi
+# rsp 是辅助节点(driver 自己也发 /tf_static),死了只告警不拉闸。
+# rsp is auxiliary (the driver publishes /tf_static too): warn, don't abort.
+if ! kill -0 "$(cat "${LOG_DIR}/rsp.pid")" 2>/dev/null; then
+  echo "[WARN] robot_state_publisher 起来就死了 | died on startup, see ${LOG_DIR}/robot_state_publisher.log" >&2
+  tail -5 "${LOG_DIR}/robot_state_publisher.log" >&2 || true
 fi
 
 echo "[INFO] 已启动 | started (pid ${DRIVER_PID}). 日志 | logs: ${LOG_DIR}/"
