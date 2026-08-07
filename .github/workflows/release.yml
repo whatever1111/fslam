@@ -1,0 +1,250 @@
+name: release
+
+# fslam 发行版分支的绑定发布:driver 同发行版 release 的二进制 + fslam 部署层。
+# Paired releases for fslam distro branches: the driver's same-distro binary
+# release + the fslam deployment layer.
+#
+#   git tag foxy-v1.0.0 foxy && git push origin foxy-v1.0.0
+#
+# 分支上的 DRIVER_RELEASE 文件钉住 driver 的 release tag(如 foxy-v1.0.0);
+# workflow 下载其公开资产、核 SHA256、打包:
+#   - fslam-m20_<ver>_<distro>_arm64.tar.gz       原生捆绑包 | native bundle
+#       driver/  = driver release 的 install/+fpsdk/(二进制,无源码)
+#       fslam/   = run 脚本 + lib + config + systemd 单元
+#   - ..._docker-image.tar.gz                      docker load 镜像 | image
+#   - SHA256SUMS.txt
+# 镜像同时推 ghcr.io/<owner>/fslam-m20:<distro>-<ver>。无源码审计与 driver
+# 仓库同规则。The no-source audit matches the driver repo's rules.
+
+on:
+  push:
+    tags:
+      - 'foxy-v*'
+      - 'humble-v*'
+  workflow_dispatch:
+    inputs:
+      distro:
+        description: 'ROS 2 distro'
+        required: true
+        type: choice
+        options:
+          - foxy
+          - humble
+      version:
+        description: 'Version (X.Y.Z) — the tag/release becomes <distro>-v<version>'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Resolve distro, version, image name
+        id: rv
+        env:
+          IN_DISTRO: ${{ inputs.distro }}
+          IN_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            distro="${IN_DISTRO}"
+            version="${IN_VERSION}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            distro="${tag%%-v*}"
+            version="${tag#*-v}"
+          fi
+          echo "distro=${distro}"          >> "${GITHUB_OUTPUT}"
+          echo "version=${version}"        >> "${GITHUB_OUTPUT}"
+          echo "tag=${distro}-v${version}" >> "${GITHUB_OUTPUT}"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fslam-m20" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch pinned driver release (verify SHA256)
+        id: drv
+        env:
+          DISTRO: ${{ steps.rv.outputs.distro }}
+        run: |
+          if [ ! -f DRIVER_RELEASE ]; then
+            echo "::error::DRIVER_RELEASE file missing on this branch — it must pin the driver release tag (e.g. foxy-v1.0.0)"
+            exit 1
+          fi
+          driver_tag="$(tr -d '[:space:]' < DRIVER_RELEASE)"
+          case "${driver_tag}" in
+            "${DISTRO}-v"*) ;;
+            *) echo "::error::DRIVER_RELEASE '${driver_tag}' does not match distro '${DISTRO}'"; exit 1 ;;
+          esac
+          dver="${driver_tag#*-v}"
+          base="https://github.com/whatever1111/fixposition_driver/releases/download/${driver_tag}"
+          mkdir -p dl
+          curl -fsSL -o "dl/fixposition-driver-m20_${dver}_${DISTRO}_arm64.tar.gz" \
+            "${base}/fixposition-driver-m20_${dver}_${DISTRO}_arm64.tar.gz"
+          curl -fsSL -o "dl/fixposition-driver-m20_${dver}_${DISTRO}_arm64_docker-image.tar.gz" \
+            "${base}/fixposition-driver-m20_${dver}_${DISTRO}_arm64_docker-image.tar.gz"
+          curl -fsSL -o dl/SHA256SUMS.txt "${base}/SHA256SUMS.txt"
+          ( cd dl && sha256sum -c SHA256SUMS.txt )
+          echo "driver_tag=${driver_tag}" >> "${GITHUB_OUTPUT}"
+          echo "dver=${dver}"             >> "${GITHUB_OUTPUT}"
+
+      - name: Assemble native bundle
+        env:
+          DISTRO: ${{ steps.rv.outputs.distro }}
+          VERSION: ${{ steps.rv.outputs.version }}
+          DRIVER_TAG: ${{ steps.drv.outputs.driver_tag }}
+          DVER: ${{ steps.drv.outputs.dver }}
+        run: |
+          if [ "${DISTRO}" != "foxy" ]; then
+            echo "::error::bundle assembly for '${DISTRO}' is not wired yet (only foxy)"
+            exit 1
+          fi
+          root="bundle/fslam-m20-${DISTRO}"
+          mkdir -p "${root}/fslam/lib" "${root}/fslam/config/fixposition" "${root}/fslam/systemd"
+          tar -xzf "dl/fixposition-driver-m20_${DVER}_${DISTRO}_arm64.tar.gz" -C "${root}"
+          mv "${root}/fixposition-driver-m20" "${root}/driver"
+          cp run_m20_foxy.sh                        "${root}/fslam/"
+          cp lib/deploy_common.sh                   "${root}/fslam/lib/"
+          cp config/fixposition/config_m20.yaml     "${root}/fslam/config/fixposition/"
+          cp config/fixposition/robot.urdf          "${root}/fslam/config/fixposition/"
+          cp systemd/m20_loc_foxy.service           "${root}/fslam/systemd/"
+          {
+            echo "# fslam-m20 ${DISTRO} bundle (fslam ${VERSION}, driver ${DRIVER_TAG})"
+            echo
+            echo "Run in place (the driver tree is a drop-in WS for run_m20_foxy.sh):"
+            echo
+            echo '```bash'
+            echo "here=\$(pwd)"
+            echo "WS=\"\${here}/driver\" ./fslam/run_m20_foxy.sh"
+            echo '```'
+            echo
+            echo "As a service: install fslam/systemd/m20_loc_foxy.service, then override its"
+            echo "paths with a drop-in:"
+            echo
+            echo '```ini'
+            echo "# /etc/systemd/system/m20_loc_foxy.service.d/bundle.conf"
+            echo "[Service]"
+            echo "Environment=WS=/path/to/bundle/driver"
+            echo "ExecStart="
+            echo "ExecStart=/bin/bash /path/to/bundle/fslam/run_m20_foxy.sh"
+            echo '```'
+            echo
+            echo "Foxy notes: the driver tree ships no drdds (the robot's system drdds is used)"
+            echo "and no python typesupport (no 'ros2 topic echo' of fixposition custom msgs)."
+          } > "${root}/README.md"
+
+      - name: No-source audit (bundle)
+        run: |
+          bad="$(find bundle \( -type d -name include \) -print -o \
+            \( -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' \
+               -o -name '*.h' -o -name '*.hpp' -o -name '*.hh' -o -name '*.hxx' \) \) -print -o \
+            \( -type f -name '*.py' ! -name '_local_setup_util*' \) -print)"
+          if [ -n "${bad}" ]; then
+            echo "::error::source files found in the bundle:"
+            echo "${bad}"
+            exit 1
+          fi
+          echo "bundle audit clean"
+
+      - name: Build docker image on the driver release image
+        env:
+          DISTRO: ${{ steps.rv.outputs.distro }}
+          VERSION: ${{ steps.rv.outputs.version }}
+          DVER: ${{ steps.drv.outputs.dver }}
+          IMAGE: ${{ steps.rv.outputs.image }}
+        run: |
+          docker load < "dl/fixposition-driver-m20_${DVER}_${DISTRO}_arm64_docker-image.tar.gz"
+          base_tag="$(docker images --format '{{.Repository}}:{{.Tag}}' | grep "fixposition-driver-m20:${DISTRO}-${DVER}" | head -1)"
+          test -n "${base_tag}"
+          docker build -f release/Dockerfile \
+            --build-arg BASE_IMAGE="${base_tag}" \
+            -t "${IMAGE}:${DISTRO}-${VERSION}" \
+            -t "${IMAGE}:${DISTRO}-latest" .
+
+      - name: No-source audit (image)
+        env:
+          DISTRO: ${{ steps.rv.outputs.distro }}
+          VERSION: ${{ steps.rv.outputs.version }}
+          IMAGE: ${{ steps.rv.outputs.image }}
+        run: |
+          bad="$(docker run --rm --entrypoint /usr/bin/find "${IMAGE}:${DISTRO}-${VERSION}" \
+            /opt/fixposition /config \
+            \( -type d -name include \) -print -o \
+            \( -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' \
+               -o -name '*.h' -o -name '*.hpp' -o -name '*.hh' -o -name '*.hxx' \) \) -print -o \
+            \( -type f -name '*.py' ! -name '_local_setup_util*' \) -print)"
+          if [ -n "${bad}" ]; then
+            echo "::error::source files found in the image:"
+            echo "${bad}"
+            exit 1
+          fi
+          echo "image audit clean"
+
+      - name: Pack assets
+        env:
+          DISTRO: ${{ steps.rv.outputs.distro }}
+          VERSION: ${{ steps.rv.outputs.version }}
+          IMAGE: ${{ steps.rv.outputs.image }}
+        run: |
+          mkdir -p out
+          tar -C bundle -czf "out/fslam-m20_${VERSION}_${DISTRO}_arm64.tar.gz" "fslam-m20-${DISTRO}"
+          docker save "${IMAGE}:${DISTRO}-${VERSION}" | gzip \
+            > "out/fslam-m20_${VERSION}_${DISTRO}_arm64_docker-image.tar.gz"
+          ( cd out && sha256sum ./* > SHA256SUMS.txt && cat SHA256SUMS.txt )
+
+      - name: Push image to ghcr.io
+        env:
+          DISTRO: ${{ steps.rv.outputs.distro }}
+          VERSION: ${{ steps.rv.outputs.version }}
+          IMAGE: ${{ steps.rv.outputs.image }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker push "${IMAGE}:${DISTRO}-${VERSION}"
+          docker push "${IMAGE}:${DISTRO}-latest"
+
+      - name: Create GitHub release
+        env:
+          DISTRO: ${{ steps.rv.outputs.distro }}
+          VERSION: ${{ steps.rv.outputs.version }}
+          TAG: ${{ steps.rv.outputs.tag }}
+          IMAGE: ${{ steps.rv.outputs.image }}
+          DRIVER_TAG: ${{ steps.drv.outputs.driver_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "M20 localization deployment for ROS 2 **${DISTRO}** (arm64) — fslam layer"
+            echo "paired with driver release **${DRIVER_TAG}** (binaries reused verbatim,"
+            echo "SHA256-verified; no source code in any asset)."
+            echo
+            echo "| asset | contents |"
+            echo "|---|---|"
+            echo "| \`fslam-m20_${VERSION}_${DISTRO}_arm64.tar.gz\` | \`driver/\` (binary install tree) + \`fslam/\` (launcher, config, systemd unit) + README |"
+            echo "| \`..._docker-image.tar.gz\` | \`docker load\`-able image with the M20 config baked at \`/config/fixposition.yaml\` (also \`${IMAGE}:${DISTRO}-${VERSION}\`) |"
+            echo "| \`SHA256SUMS.txt\` | checksums |"
+            echo
+            echo "## Native (validated deployment path)"
+            echo
+            echo '```bash'
+            echo "tar -xzf fslam-m20_${VERSION}_${DISTRO}_arm64.tar.gz"
+            echo "cd fslam-m20-${DISTRO}"
+            echo "WS=\"\$(pwd)/driver\" ./fslam/run_m20_foxy.sh"
+            echo '```'
+            echo
+            echo "## Docker (config baked in; container path not yet field-validated on the robot)"
+            echo
+            echo '```bash'
+            echo "docker load < fslam-m20_${VERSION}_${DISTRO}_arm64_docker-image.tar.gz"
+            echo "docker run --rm --network host ${IMAGE}:${DISTRO}-${VERSION}"
+            echo '```'
+            echo
+            echo "On the M20 robot use \`--network host\` (or \`none\`) only — never the default bridge."
+          } > notes.md
+          gh release create "${TAG}" \
+            --target "${GITHUB_SHA}" \
+            --title "fslam-m20 ${DISTRO} v${VERSION} (binary-only)" \
+            --notes-file notes.md \
+            out/*
