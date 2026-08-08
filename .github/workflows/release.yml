@@ -238,10 +238,20 @@ jobs:
             echo
             echo '```bash'
             echo "docker load < fslam-m20_${VERSION}_${DISTRO}_arm64_docker-image.tar.gz"
-            echo "docker run --rm --network host ${IMAGE}:${DISTRO}-${VERSION}"
+            echo "docker run --rm --network host -v /dev/shm:/dev/shm ${IMAGE}:${DISTRO}-${VERSION}"
             echo '```'
             echo
-            echo "On the M20 robot use \`--network host\` (or \`none\`) only — never the default bridge."
+            echo "**Both flags are mandatory and omitting either fails silently** — the node runs"
+            echo "and publishes but never receives, with no crash and no error. \`--network host\`"
+            echo "for the sensor traffic; \`-v /dev/shm:/dev/shm\` because Fast DDS's shared-memory"
+            echo "transport lives in POSIX shm files and docker's default private 64 MB \`/dev/shm\`"
+            echo "hides every host publisher. Measured on the M20 (2026-08-08): host namespace"
+            echo "receives the OEM lidar cloud immediately, a private \`/dev/shm\` receives nothing,"
+            echo "and a private IPC namespace with the host \`/dev/shm\` receives normally."
+            echo
+            echo "On the M20 robot use \`--network host\` (or \`none\`) only — never the default"
+            echo "bridge: creating a bridge veth triggers a kernel RTNL deadlock that wedges the"
+            echo "host until a power cycle. The native path above is the validated one."
           } > notes.md
           gh release create "${TAG}" \
             --target "${GITHUB_SHA}" \
