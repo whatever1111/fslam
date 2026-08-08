@@ -128,6 +128,8 @@ if ! kill -0 "$(cat "${LOG_DIR}/rsp.pid")" 2>/dev/null; then
 fi
 
 echo "[INFO] 已启动 | started (pid ${DRIVER_PID}). 日志 | logs: ${LOG_DIR}/"
-echo "[INFO] 验证 | verify: ros2 topic hz /ODOM; ros2 topic echo --once /LOCATION_STATUS"
+# Foxy 的 ros2 topic echo 没有 --once(Galactic 才加),别在提示里教错命令。
+# Foxy's ros2 topic echo has no --once (that arrived in Galactic) — don't suggest it here.
+echo "[INFO] 验证 | verify: ros2 topic hz /ODOM; ros2 topic echo --qos-profile sensor_data /LOCATION_STATUS"
 echo "[INFO] 关键检查 | key check: input_val.lidar 应为 1 | should be 1"
 wait "${DRIVER_PID}"
