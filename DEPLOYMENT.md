@@ -126,6 +126,40 @@ clouds), but **native remains the production path**.
 
 ---
 
+## 3.5 配置:话题名全部可配 | Configuration: every topic name is configurable
+
+线上用的是 `config/fixposition/config_m20.yaml`(镜像已烘进去,原生方式由 `run_m20_foxy.sh` 传入)。
+驱动发布物里也自带一份同名默认配置,见驱动仓库 `DEPLOYMENT.md` §3.1。
+The live file is `config/fixposition/config_m20.yaml` (baked into the image; passed by
+`run_m20_foxy.sh` in the native path). The driver release also bundles a same-named default — see
+§3.1 of the driver repo's `DEPLOYMENT.md`.
+
+M20 接口的话题名**逐个可配**,不像通用输出那样只能整体换命名空间:
+The M20 interface makes its topic names **individually configurable**, unlike the generic outputs
+which only offer a namespace switch:
+
+```yaml
+/**:
+  ros__parameters:
+    m20:
+      odom_topic: "/ODOM"                  # 输出:融合位姿 | output: fused pose
+      lidar_topic: "/LIDAR/POINTS"         # 输入:OEM 点云 | input: OEM cloud
+      motion_info_topic: "/MOTION_INFO"    # 输入:腿式里程/轮速 | input: leg odometry
+      matching_odom_topic: ""              # SLAM 模式下监控匹配质量,留空禁用 | SLAM-mode matching health, empty disables
+      lidar_to_base_xyzrpy: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # M20 上是 identity | identity on the M20
+```
+
+> M20 模式下轮速走 `/MOTION_INFO` 直接进模块,**不要**再去开通用的 `converter` 或往 `speed_topic` 发 ——
+> 那是给没有 `/MOTION_INFO` 的平台准备的另一条路。
+> In M20 mode wheelspeed enters through `/MOTION_INFO` directly. Do **not** also enable the generic
+> `converter` or publish to `speed_topic`; those are the alternative route for platforms without
+> `/MOTION_INFO`.
+
+改了 `odom_topic` 就等于改了对外契约,导航侧订阅的名字要同步改。
+Changing `odom_topic` changes the outward contract — the navigation subscribers must change with it.
+
+---
+
 ## 4. 验证清单 | Verification checklist
 
 ```bash
