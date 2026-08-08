@@ -126,6 +126,92 @@ clouds), but **native remains the production path**.
 
 ---
 
+## 3.2 直接跑启动脚本(日常调试就用这个)| Running the launcher scripts directly (the day-to-day way)
+
+前面三种方式最终都落到仓库根目录的启动脚本上。调试、临时切模式、上手验证,直接跑脚本比装 systemd 快得多
+—— 不用装 unit,不用 `daemon-reload`,改完配置重跑一次就行。
+All three methods above ultimately run a launcher script from the repo root. For debugging, switching
+modes temporarily, or a first hands-on check, running the script directly is much faster than going
+through systemd — no unit to install, no `daemon-reload`, just edit the config and run it again.
+
+### 脚本一览 | The launchers
+
+| 脚本 script | 模式 mode | 配置 config | 日志目录 log dir |
+|---|---|---|---|
+| `run_m20_foxy.sh` | **M20 原生 Foxy(线上)** native Foxy, live | `config_m20.yaml` | `logs/m20_foxy/` |
+| `run_m20_prod.sh` | M20 Humble 容器 Humble container | `config_m20.yaml` | `logs/m20/` |
+| `run_fixposition_prod.sh` | **fixposition-only**(纯 RTK,无 SLAM;容器驱动 + 宿主 Python 节点) pure RTK, no SLAM | `config_fp_only.yaml` | `logs/fixposition_only/` |
+| `run_fast_lio_pgo_prod.sh` | SLAM(FAST-LIO + PGO) | — | `logs/fslam_prod/` |
+
+前三个都发 `/ODOM`,**任何时候只能跑一个**。脚本启动时会自动停掉另外两套(容器 + pid 文件),所以直接换脚本
+跑就是切模式,不用先手动清场。
+The first three all publish `/ODOM`, so **only one may run at a time**. Each script stops the other
+two on startup (containers plus pid files), so switching modes is just running a different script —
+no manual teardown needed.
+
+### 跑起来 | Running
+
+```bash
+cd /home/user/fslam
+
+# 前台跑(会一直占着终端,Ctrl-C 停)| foreground: it holds the terminal, Ctrl-C stops it
+./run_m20_foxy.sh
+
+# 后台跑 | detached
+setsid nohup ./run_m20_foxy.sh > /tmp/m20_foxy.log 2>&1 &
+```
+
+> `run_m20_foxy.sh` 最后是 `wait`,所以它**前台阻塞**——systemd 正是靠这点用 `Type=simple` 管着它。
+> 想脱离终端就用上面的 `setsid nohup`。`run_fixposition_prod.sh` 是容器模式,起完就返回,不阻塞。
+> `run_m20_foxy.sh` ends in `wait`, so it **blocks in the foreground** — which is exactly how systemd
+> supervises it with `Type=simple`. Use the `setsid nohup` form to detach. `run_fixposition_prod.sh`
+> is container-based and returns immediately instead.
+
+### 环境变量覆盖 | Environment overrides
+
+不用改脚本,直接用环境变量指路 —— 发布包当工作区就是这么用的:
+No need to edit the scripts; point them elsewhere with environment variables, which is exactly how
+the release bundle is used as a workspace:
+
+```bash
+WS=/path/to/bundle/driver \
+FIXPOSITION_CONFIG_DIR=/path/to/other/config \
+LOG_DIR=/tmp/m20_logs \
+ROS_DOMAIN_ID=0 \
+    ./run_m20_foxy.sh
+```
+
+`run_m20_foxy.sh` 认:`WS`、`ROS_SETUP`、`SDK_PREFIX`、`FIXPOSITION_CONFIG_DIR`、`LOG_DIR`、
+`ROS_DOMAIN_ID`。容器版另有 `DOCKER_IMAGE`、`CONTAINER_NAME` 等。
+`run_m20_foxy.sh` honours `WS`, `ROS_SETUP`, `SDK_PREFIX`, `FIXPOSITION_CONFIG_DIR`, `LOG_DIR` and
+`ROS_DOMAIN_ID`. The container launchers add `DOCKER_IMAGE`, `CONTAINER_NAME` and friends.
+
+### 停止 | Stopping
+
+脚本把子进程 pid 写在日志目录里,手工起的就手工停:
+The scripts write their children's pids into the log directory; what you start by hand, you stop by
+hand:
+
+```bash
+kill "$(cat logs/m20_foxy/driver.pid)" "$(cat logs/m20_foxy/rsp.pid)" 2>/dev/null
+# 容器模式 | container mode
+docker stop fixposition-runtime && docker rm fixposition-runtime
+```
+
+日志:`logs/<模式>/fixposition.log`(驱动)、`robot_state_publisher.log`。
+Logs: `logs/<mode>/fixposition.log` for the driver, plus `robot_state_publisher.log`.
+
+> **手工跑和 systemd 混用要小心。** 手工起的进程不受 unit 的 `Conflicts=` 管;`systemctl start
+> m20_loc_foxy` 也不会知道你手上已经跑了一个 —— 结果就是两个 `/ODOM` publisher。先停掉一边再起另一边。
+> **Be careful mixing manual runs with systemd.** A hand-started process is not covered by the unit's
+> `Conflicts=`, and `systemctl start m20_loc_foxy` will not notice one you already have running — the
+> result is two `/ODOM` publishers. Stop one side before starting the other.
+
+> `--check` 只有 `run_fast_lio_pgo_prod.sh` 有,别的脚本没有这个选项;验证按 §4 走。
+> Only `run_fast_lio_pgo_prod.sh` has `--check`; the other launchers do not. Verify per §4 instead.
+
+---
+
 ## 3.5 配置:话题名全部可配 | Configuration: every topic name is configurable
 
 线上用的是 `config/fixposition/config_m20.yaml`(镜像已烘进去,原生方式由 `run_m20_foxy.sh` 传入)。
