@@ -60,3 +60,11 @@ WS=/home/user/fixposition-driver-m20 ./run_m20_foxy.sh          # 手动 | by ha
 
 主干原则不变:能写成可移植的就进 `main`,发行版分支只留真正分叉的东西。
 Trunk rule unchanged: portable things go to `main`; distro branches carry only true divergence.
+
+**模式不设分支 | No branches per mode:** fslam 支持两种模式(rtk-only 与 fslam/SLAM),但模式是
+**运行时维度**——两种模式共存在同一台狗上,靠 systemd 单元切换(全部发 `/ODOM`,互斥)。给模式开
+分支会迫使"切模式 = 换 checkout",还会复制共享的 lib/config。分支轴只留给 ROS 发行版。
+fslam supports two modes (rtk-only and fslam/SLAM), but mode is a **runtime axis** — both coexist
+on one robot and are switched by systemd unit (all publish `/ODOM`, mutually exclusive). A branch
+per mode would make switching a checkout and duplicate shared lib/config. The branch axis is
+reserved for the ROS distro.
