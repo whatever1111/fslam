@@ -1,134 +1,94 @@
-# fslam — 云深处 M20 机器狗 SLAM 部署 | Deep Robotics M20 deployment
+# fslam — 云深处 M20 定位部署项目 | Deep Robotics M20 localization deployment
 
-基于 LIO-SLAM CI/CD 发布镜像 `wanderer123/fslam-humble:{arm64,amd64}` 的生产部署仓库。
-狗上只需要这个 checkout + docker,不需要源码/编译。
+M20 的**部署项目**:两种定位模式,同一个 OEM 三话题契约(`/ODOM` + `/LOC_BODY_POINTS` +
+`/LOCATION_STATUS`)。两个上游算法仓库都是通用组件,不含部署逻辑 —— 部署逻辑全在这里。
+The M20 **deployment project**: two localization modes, one OEM three-topic contract. Both
+upstream algorithm repos are generic components with no deployment logic — all of it lives here.
 
-## 部署 | Deploy
+| 模式 mode | 定位来源 | 上游 upstream | 状态 status |
+|---|---|---|---|
+| **rtk**(fixposition-only)| VRTK2 RTK/INS,fork 驱动直接交付三话题 the forked driver delivers the contract itself | [fixposition_driver](https://github.com/whatever1111/fixposition_driver) 二进制 release(`DRIVER_RELEASE` 钉版)| **线上 live**:原生 Foxy,`m20_loc_foxy.service`(2026-08-08 起)|
+| **fslam**(SLAM)| LIO-SLAM(FAST-LIO + PGO),容器内用镜像自带的上游原版 fixposition 驱动 | LIO-SLAM 镜像(`SLAM_IMAGE` 钉版,私有 registry)| 工具链就绪:`fslam_loc.service` |
+
+两种模式共存于狗上、靠 systemd 单元切换(全部发 `/ODOM`,互斥)——所以模式不是分支;分支轴是
+ROS 发行版(见 `DISTRO.md`)。**M20 上定位进程必须跑在 Foxy**(Humble 的 Fast DDS 2.6 永远收不到
+OEM 的 loopback-only 雷达云,详见 `DISTRO.md`)。
+Modes coexist on the robot and switch by systemd unit (all publish `/ODOM`, mutually exclusive) —
+so modes are not branches; the branch axis is the ROS distro (see `DISTRO.md`). **Localization on
+the M20 must run on Foxy** (Humble's Fast DDS 2.6 can never receive the OEM's loopback-only cloud).
+
+## 快速开始 | Quick start
+
+**完整步骤看 [DEPLOYMENT.md](DEPLOYMENT.md)** —— 这里只给最短路径:
+Full instructions in **[DEPLOYMENT.md](DEPLOYMENT.md)**; the shortest paths:
 
 ```bash
-# 首次 | first time
-git clone https://github.com/whatever1111/fslam.git && cd fslam
-docker pull wanderer123/fslam-humble:arm64
+# rtk 模式(线上路径)· 免编译:从 release 取捆绑包 | rtk mode, no compile
+tar -xzf fslam-rtk_<ver>_foxy_arm64.tar.gz && cd fslam-rtk-foxy
+WS="$(pwd)/driver" ./fslam/run_m20_foxy.sh
 
-# fslam 模式(RTK + FAST-LIO-PGO)| fslam mode
-./run_fast_lio_pgo_prod.sh
+# rtk 模式 · 狗上编译 | or build on the robot
+BUILD_CPUS=2,3 BUILD_JOBS=2 tools/build_m20_foxy.sh --source /home/user/m20_src
+sudo systemctl enable --now m20_loc_foxy
 
-# fixposition-only 模式(纯 RTK,无 SLAM)| pure RTK, no SLAM
-./run_fixposition_prod.sh
-
-# M20 模式(纯 RTK,三话题由驱动直出,无宿主机 Python 节点)| driver-native
-tools/build_m20_image.sh && ./run_m20_prod.sh
-
-# 开机自启(fp-only)| boot-start
-sudo cp systemd/rtk_loc.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now rtk_loc
-
-# 更新 = git pull(配置/脚本) + docker pull(算法二进制)
+# fslam(SLAM)模式 | fslam (SLAM) mode
+./run_fast_lio_pgo_prod.sh            # 镜像先按 SLAM_IMAGE 离线搬上狗,见 DEPLOYMENT.md §3.4
+./run_fast_lio_pgo_prod.sh --check    # 链路体检 | per-topic pipeline check
 ```
+
+发布 | releases:一个 `foxy-v*` release 同时带 rtk 捆绑包/镜像和 slam 部署层捆绑包
+(SLAM 镜像只钉版不分发)。One `foxy-v*` release ships the rtk bundle/image plus the slam
+deployment-layer bundle (the SLAM image is pinned, never attached).
 
 ## 数据流 | Data flow
 
-两种模式对外接口一致(狗导航栈消费)| both modes expose the same dog-facing interface:
-
-| 话题 | 类型 | 来源(fslam 模式) | 来源(fp-only 模式) |
-|------|------|-------------------|---------------------|
-| `/ODOM` | nav_msgs/Odometry | canonical 管线**直出**(fusion 节点 `odom_topic:=/ODOM`,无中继) | 宿主机 `fp_to_odom.py` 中继 `/fixposition/odometry_enu` |
-| `/LOC_BODY_POINTS` | sensor_msgs/PointCloud2 | 宿主机 `fp_to_odom.py`:`/LIDAR/POINTS2` 去畸变到 base_link,时戳对齐最新 `/ODOM` | 同左 |
-| `/LOCATION_STATUS` | drdds/LocationStatus | 宿主机 `fp_to_odom.py`(与点云同戳;total_status: 0 未初始化/1 正常/2 低质量/3 丢失) | 同左 |
-
-fslam 模式:容器内 ① Fixposition driver(等 RTK/FPA 输出)→ ② canonical 管线
-(`--profile m20`,fusion 直出 `/ODOM` @100Hz,配置树用本 checkout 的
-`config/slam/` 只读覆盖)。宿主机自动拉起 `motion_info_to_twist.py`(轮速桥)
-与 `fp_to_odom.py`(`relay_enable:=false`,只订阅 `/ODOM` 作位姿源,不中继)。
-
-> 直出 `/ODOM` 需要镜像内 fusion 节点带 `odom_topic` 参数(旧镜像忽略之,
-> `/ODOM` 无数据 → `--check` 可见,请 `docker pull` 更新镜像)。
-
-常用 | common:
-
-```bash
-./run_fast_lio_pgo_prod.sh --foreground          # 前台调试
-./run_fast_lio_pgo_prod.sh --fp-stream tcpcli://<ip>:21000
-./run_fast_lio_pgo_prod.sh --check               # 链路体检:逐话题测频找断点
-docker logs -f fslam-runtime                     # 看运行日志
-docker stop fslam-runtime && docker rm fslam-runtime   # 停止(宿主机节点随看门狗回收)
-```
-
-## M20 模式(C++ 驱动版)| M20 mode (driver-native)
-
-`fp_to_odom.py` 和 `motion_info_to_twist.py` 做的事已经全部移进 Fixposition
-driver 进程:三话题、去畸变、2 Hz 状态、轮速回灌都在驱动里完成,宿主机不再跑
-Python 节点。驱动源码在 `whatever1111/fixposition_driver` 分支 `m20`,设计说明见
-该仓库的 `M20.md`。
-
-Everything `fp_to_odom.py` and `motion_info_to_twist.py` did now happens inside
-the Fixposition driver process — the three topics, the deskewing, the 2 Hz
-status and the wheelspeed feedback — so no Python runs on the host any more.
-The driver lives in `whatever1111/fixposition_driver` branch `m20`; see `M20.md`
-there for the design.
-
-**LIO-SLAM 仓库不受影响**:它是多产品共用的基座,M20 专属的东西只在本仓库叠加
-(`container/Dockerfile.m20` 在发布镜像上加一层)。
-**LIO-SLAM is untouched**: it is the shared base for other products, so the
-M20-specific driver is layered on top of its published image from this
-repository only.
-
-```bash
-tools/build_m20_image.sh                       # 联网机器:自动 clone 驱动源码
-tools/build_m20_image.sh --source ./fixposition_driver   # 狗上:源码用 bundle 传过去
-./run_m20_prod.sh                              # 起容器(默认镜像 fslam-m20:<arch>)
-docker logs -f m20-runtime
-```
-
-改回 Python 版随时可以:`./run_fixposition_prod.sh`(它会停掉 M20 容器)。
-两套不能同时跑 —— 都发 `/ODOM`,导航会看到两个打架的位姿源。
-Going back is always possible with `./run_fixposition_prod.sh`. The two must
-never run together: both publish `/ODOM`.
-
-差异 | differences:
-
-| | Python 版 | M20 版 |
-|---|---|---|
-| 进程 | 容器 driver + 宿主机 2 个 Python 节点 | 容器 driver 一个进程 |
-| `/ODOM` | `/fixposition/odometry_enu` 中继一跳 | driver 解析线程内直发,无跳 |
-| 点云耗时 | ~46 ms/帧(1 MB 云) | ~1 ms/帧,消息缓冲区原地变换 |
-| 轮速 | `/MOTION_INFO` → Twist → driver converter | driver 直接吃 `/MOTION_INFO` |
-| DDS profile | 容器白名单 + 宿主机默认 | 容器默认(全接口) |
+| 话题 | 类型 | rtk 模式来源 | fslam 模式来源 |
+|------|------|-------------|----------------|
+| `/ODOM` | nav_msgs/Odometry | fork 驱动解析线程内直发 driver-native, no relay | canonical 管线 fusion 直出(`odom_topic:=/ODOM`)|
+| `/LOC_BODY_POINTS` | sensor_msgs/PointCloud2 | 驱动内去畸变(`/LIDAR/POINTS` → base_link,对齐最新 `/ODOM`)| 宿主机 `fp_to_odom.py` |
+| `/LOCATION_STATUS` | drdds/LocationStatus | 驱动内 2 Hz(total_status: 0 未初始化/1 正常/2 低质量/3 丢失)| 宿主机 `fp_to_odom.py`(同戳)|
 
 ## 目录 | Layout
 
 ```
-run_fast_lio_pgo_prod.sh   fslam 模式启动入口 | fslam-mode launcher
-run_fixposition_prod.sh    fp-only 模式启动入口(Python 版)| fp-only launcher
-run_m20_prod.sh            M20 模式启动入口(驱动直出)| M20-mode launcher
-tools/build_m20_image.sh   构建 M20 驱动镜像 | build the M20 driver image
-lib/deploy_common.sh       两脚本共享的宿主机进程管理函数 | shared helpers
+DEPLOYMENT.md              部署指南(两种模式)| the deployment guide
+DISTRO.md                  分支/发行版配对(仅发行版分支)| branch pairing (distro branches)
+DRIVER_RELEASE  SLAM_IMAGE 两个模式的钉版文件 | the per-mode pin files
+run_m20_foxy.sh            rtk 模式启动器(原生 Foxy,线上)| rtk launcher (native Foxy, live)
+run_fast_lio_pgo_prod.sh   fslam 模式启动器 | fslam-mode launcher
+run_fixposition_prod.sh    旧 Python rtk(回退用)| legacy Python rtk (fallback)
+run_m20_prod.sh            旧 Humble 容器 rtk(受 loopback 墙限制)| legacy Humble-container rtk
+tools/build_m20_foxy.sh    狗上编译 rtk 驱动 | build the rtk driver on the robot
+tools/build_m20_image.sh   构建 Humble 容器镜像(humble 分支用)| Humble container image
+lib/deploy_common.sh       共享函数(含 distro→驱动分支映射)| shared helpers
 container/                 容器载荷(只读挂载)| container payloads (mounted ro)
-  entrypoint_fslam.sh        · FP driver → canonical 管线
-  entrypoint_fixposition.sh  · FP driver + robot_state_publisher
-  fixposition_driver.launch  · fslam 模式 FP driver 启动文件(respawn)
-  entrypoint_m20.sh          · M20 模式:带 M20 模块的 FP driver + robot_state_publisher
-  Dockerfile.m20             · 在发布镜像上叠加 M20 驱动 | M20 driver layered on the base image
-host/                      宿主机 ROS2 节点(狗侧 FastDDS + drdds)| host nodes
-  fp_to_odom.py              · /ODOM(fp-only 中继)+ /LOC_BODY_POINTS + /LOCATION_STATUS
+host/                      fslam 模式宿主机胶水 | fslam-mode host glue
+  fp_to_odom.py              · /LOC_BODY_POINTS + /LOCATION_STATUS(+旧版 /ODOM 中继)
   motion_info_to_twist.py    · 轮速桥 /MOTION_INFO → FP 设备融合
 config/
   dds/                       · cyclonedds.xml(容器)/ fastdds.xml(宿主机)
-  fixposition/               · 驱动配置:config_fp_only.yaml(Python 版)/
-                               config_m20.yaml(M20 版)/ node.launch / urdf
-  slam/                      · canonical 三层配置树(base+profiles+modes,
-                               源:LIO-SLAM 仓库,保持同步,勿在此直接改)
-systemd/rtk_loc.service    开机自启单元(Python 版 fp-only)| boot unit
-systemd/m20_loc.service    开机自启单元(M20 版,与上者互斥)| boot unit (exclusive)
+  fixposition/               · 驱动配置 config_m20.yaml / config_fp_only.yaml / robot.urdf
+  slam/                      · canonical 三层配置树(源:LIO-SLAM 仓库,保持同步,勿在此直改)
+systemd/
+  m20_loc_foxy.service       · rtk 模式(线上)| rtk mode (live)
+  fslam_loc.service          · fslam 模式 | fslam mode
+  rtk_loc.service m20_loc.service · 旧链回退 | legacy fallbacks
+release/                   发布流水线载荷 | release pipeline payloads
+legacy/                    存档勿用(含从 LIO-SLAM 迁来的部署遗产 lio-slam-era/)
 logs/                      运行时日志(git 忽略)| runtime logs (git-ignored)
-legacy/                    旧链存档(fp_imu_relay/字段重命名/别名中继时代),勿再使用
 ```
 
 ## 注意 | Notes
 
-- 所有路径均由脚本从 checkout 位置推导,可用环境变量覆盖 —— 无硬编码路径。
-  All paths derive from the checkout location (env-overridable) — no hard-coding.
-- `config/slam/` 与镜像内烘焙配置两边不一致时以本 checkout 为准(挂载优先);
-  配置改动请在 LIO-SLAM 仓库改并同步过来,保持单一事实源。
-- `/LOCATION_STATUS` 子字段(exec/loss/input)语义仍待 OEM 规范确认:Python 版见
-  `host/fp_to_odom.py` 顶部常量块,M20 版见驱动仓库 `status_monitor.hpp` 顶部,
-  两处取值一致,规范到位时一起改。
+- 所有路径由脚本从 checkout 位置推导,环境变量可覆盖 —— 无硬编码。
+  All paths derive from the checkout location, env-overridable — nothing hard-coded.
+- `config/slam/` 与镜像内烘焙配置不一致时以本 checkout 为准(挂载优先);配置改动在 LIO-SLAM
+  仓库改并同步过来,保持单一事实源。`config/slam/` (mounted) wins over the image's baked config;
+  edit in the LIO-SLAM repo and sync here — single source of truth.
+- `/LOCATION_STATUS` 子字段(exec/loss/input)语义仍待 OEM 规范确认:rtk 版见驱动仓库
+  `status_monitor.hpp` 顶部,fslam 版见 `host/fp_to_odom.py` 顶部,两处取值一致,规范到位一起改。
+  The exec/loss/input sub-field semantics still await OEM confirmation; the two implementations
+  (driver `status_monitor.hpp`, host `fp_to_odom.py`) use identical values — change both together.
+- 狗上 docker 只允许 `--network host` 或 `none`,并且必须 `-v /dev/shm:/dev/shm`(细节与实测见
+  `DEPLOYMENT.md`)。Docker on the robot: `--network host`/`none` only, and `-v /dev/shm:/dev/shm`
+  is mandatory — details and measurements in `DEPLOYMENT.md`.
