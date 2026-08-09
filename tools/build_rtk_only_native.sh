@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# build_m20_foxy.sh —— 在狗上原生编译 M20 定位驱动(Foxy,无容器)
+# build_rtk_only_native.sh —— 在狗上原生编译 M20 定位驱动(Foxy,无容器)
 #                      build the M20 driver natively on the robot (Foxy, no container)
 # ============================================================================
 # 为什么原生而不是容器:OEM 的点云 writer 绑在 127.0.0.1-only 的 DDS participant 上。
@@ -19,10 +19,10 @@
 #   and point --source at the checkout.
 #
 # 用法 | usage:
-#   tools/build_m20_foxy.sh --source /home/user/m20_src
-#   BUILD_CPUS=2,3 BUILD_JOBS=2 tools/build_m20_foxy.sh --source /home/user/m20_src
+#   tools/build_rtk_only_native.sh --source /home/user/m20_src
+#   BUILD_CPUS=2,3 BUILD_JOBS=2 tools/build_rtk_only_native.sh --source /home/user/m20_src
 #
-# 产物 | result: ${WS}/install(默认 /home/user/m20_ws),run_m20_foxy.sh 直接用
+# 产物 | result: ${WS}/install(默认 /home/user/m20_ws),run_rtk_only_native.sh 直接用
 # ============================================================================
 set -euo pipefail
 
@@ -160,4 +160,4 @@ fi
 ldd "${EXE}" | grep -q "libfixposition_driver_m20.so" || { echo "[ERROR] 镜像里没有 M20 模块 | M20 module not linked" >&2; exit 1; }
 
 echo "[INFO] 完成 | done: ${EXE}"
-echo "[INFO] 部署 | deploy: ${BASE_DIR}/run_m20_foxy.sh"
+echo "[INFO] 部署 | deploy: ${BASE_DIR}/run_rtk_only_native.sh"

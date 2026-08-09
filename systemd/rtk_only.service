@@ -1,5 +1,5 @@
 # ============================================================================
-# m20_loc_foxy.service —— 开机自启 M20 定位链路(Foxy 原生,无容器)
+# rtk_only.service —— 开机自启 M20 定位链路(Foxy 原生,无容器)
 #                         boot-start the M20 localization chain (native Foxy)
 # ----------------------------------------------------------------------------
 # 假设仓库克隆在 /home/user/fslam,工作区在 /home/user/m20_ws。
@@ -7,19 +7,19 @@
 #
 # 和 m20_loc.service(Humble 容器版)、rtk_loc.service(Python 版)三选一 ——
 # 三套都发 /ODOM,同时起等于给导航多个打架的位姿源。
-# One of m20_loc_foxy / m20_loc / rtk_loc, never more: all three publish /ODOM.
+# One of rtk_only / m20_loc / rtk_loc, never more: all three publish /ODOM.
 #
 # 安装 | install:
 #   sudo systemctl disable --now rtk_loc m20_loc
-#   sudo cp systemd/m20_loc_foxy.service /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now m20_loc_foxy
+#   sudo cp systemd/rtk_only.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rtk_only
 # ============================================================================
 [Unit]
 Description=M20 Localization Service (fslam, native Foxy)
 Wants=network-online.target
 After=network-online.target
 # 都发 /ODOM | all of these publish /ODOM
-Conflicts=rtk_loc.service m20_loc.service fslam_loc.service
+Conflicts=fslam.service rtk_loc.service m20_loc.service m20_loc_foxy.service
 
 [Service]
 # 容器版是 oneshot(起完容器就退,靠 docker 的 restart policy 保活);这里驱动是本
@@ -45,7 +45,7 @@ ExecStartPre=/sbin/ip route replace 224.0.0.0/4 dev eth0
 # systemctl restart rsdriver. See MEMORY: m20-lidar-points-publisher-failure.
 ExecStartPre=/bin/sleep 10
 
-ExecStart=/bin/bash /home/user/fslam/run_m20_foxy.sh
+ExecStart=/bin/bash /home/user/fslam/run_rtk_only_native.sh
 TimeoutStartSec=180
 
 StandardOutput=journal

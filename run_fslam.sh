@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# run_fast_lio_pgo_prod.sh —— fslam 模式生产部署 · 云深处 M20 机器狗
+# run_fslam.sh —— fslam 模式生产部署 · 云深处 M20 机器狗
 #                             fslam-mode production deploy · Deep Robotics M20
 # ============================================================================
 # 容器内 | in-container:
@@ -22,7 +22,7 @@
 # `odom_topic` parameter; older images ignore it (pipeline keeps /odom, /ODOM
 # stays silent — visible via --check).
 #
-# 用法 | usage: ./run_fast_lio_pgo_prod.sh [选项]
+# 用法 | usage: ./run_fslam.sh [选项]
 #   --profile <name>     profile(默认 m20)
 #   --image <img>        镜像(默认 wanderer123/fslam-humble:<arch>)
 #   --name <n>           容器名(默认 fslam-runtime)
@@ -53,7 +53,7 @@ NAME="${CONTAINER_NAME:-fslam-runtime}"
 MEM="${DOCKER_MEM_LIMIT:-24g}"
 SWAP="${DOCKER_MEM_SWAP:-28g}"
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
-LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs/fslam_prod}"
+LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs/fslam}"
 LIDAR_TOPIC="${LIDAR_TOPIC:-/LIDAR/POINTS}"
 CYCLONEDDS_CONFIG="${CYCLONEDDS_CONFIG:-${BASE_DIR}/config/dds/cyclonedds.xml}"
 # 宿主机节点用 FastDDS 默认 profile(全接口):/IMU、/MOTION_INFO 来自其它 CPU
@@ -224,7 +224,7 @@ if [[ -n "${USER_OVERLAY}" ]]; then
 fi
 if [[ -n "${ODOM_TOPIC}" && "${NEED_ODOM_SECTION}" == "1" ]]; then
   cat >> "${OVERLAY_FILE}" <<EOF
-# injected by run_fast_lio_pgo_prod.sh —— 管线直出 ${ODOM_TOPIC},无别名中继
+# injected by run_fslam.sh —— 管线直出 ${ODOM_TOPIC},无别名中继
 # direct ${ODOM_TOPIC} output from the fusion node (no alias relay)
 fast_lio_pgo_fusion:
   ros__parameters:

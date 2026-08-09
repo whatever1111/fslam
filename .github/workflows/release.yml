@@ -1,33 +1,32 @@
 name: release
 
-# fslam 是 M20 的部署项目,一个 release 同时交付两种模式的工具链:
-# fslam is the M20 deployment project; one release ships both mode toolchains:
+# deep-robotics-m20 的发布流水线:一个 release 同时交付两个模式的工具链。
+# Release pipeline for deep-robotics-m20: one release ships both mode toolchains.
 #
-#   rtk 模式  | rtk mode : fork 驱动二进制(DRIVER_RELEASE 钉版,下载+核 SHA256)
-#                          + 启动脚本/配置/unit → 捆绑包 + 配置烘焙镜像
-#   fslam 模式| slam mode: 部署层捆绑包(启动脚本/宿主节点/配置/unit),镜像由
-#                          SLAM_IMAGE 钉版但 **不随发布分发** —— 它在私有
-#                          registry,公开发布它的决定不归流水线做。
-#                          The SLAM image is pinned by SLAM_IMAGE but NOT
-#                          attached: it lives in a private registry, and making
-#                          it public is not the pipeline's call.
+#   rtk_only : fork 驱动二进制(DRIVER_RELEASE 钉版,下载 + 核 SHA256)
+#              native 捆绑包(driver/ + fslam/)+ docker 镜像(driver 镜像 + 烘焙配置)
+#   fslam    : 部署层捆绑包(启动脚本/宿主节点/配置/unit);镜像由 SLAM_IMAGE 钉版,
+#              但在私有 registry,**不随发布分发** —— 公开它的决定不归流水线做。
+#              The SLAM image is pinned by SLAM_IMAGE but lives in a private
+#              registry and is NOT attached — publishing it is not the pipeline's call.
 #
-#   git tag foxy-v1.1.0 foxy && git push origin foxy-v1.1.0
+# tag 格式 | tag format: deep-robotics-m20-<distro>-v<X.Y.Z>(打在发行版叶子分支上)
+#   git tag deep-robotics-m20-foxy-v1.2.0 deep-robotics-m20-foxy
+#   git push origin deep-robotics-m20-foxy-v1.2.0
 #
-# 资产 | assets:
-#   - fslam-rtk_<ver>_<distro>_arm64.tar.gz              rtk 捆绑包(driver/ + fslam/)
-#   - fslam-rtk_<ver>_<distro>_arm64_docker-image.tar.gz rtk 镜像(driver 镜像 + 烘焙配置)
-#   - fslam-slam_<ver>_arm64.tar.gz                      slam 部署层捆绑包
+# 资产 | assets(命名规则:<mode>_<ver>_[<distro>_]arm64[...]):
+#   - rtk_only_<ver>_<distro>_arm64.tar.gz               rtk_only native 捆绑包
+#   - rtk_only_<ver>_<distro>_arm64_docker-image.tar.gz  rtk_only docker 镜像
+#   - fslam_<ver>_arm64.tar.gz                           fslam 部署层捆绑包
 #   - SHA256SUMS.txt
-# rtk 镜像另推 ghcr.io/<owner>/fslam-rtk:<distro>-<ver>。
-# 无源码审计:rtk 资产禁 C/C++/头文件/python;slam 捆绑包禁 C/C++/头文件
+# rtk_only 镜像另推 ghcr.io/<owner>/rtk_only:<distro>-<ver>。
+# 无源码审计:rtk_only 资产禁 C/C++/头文件/python;fslam 捆绑包禁 C/C++/头文件
 # (host/*.py 是本仓库自己的公开部署胶水,随包分发)。
 
 on:
   push:
     tags:
-      - 'foxy-v*'
-      - 'humble-v*'
+      - 'deep-robotics-m20-*-v[0-9]*'
   workflow_dispatch:
     inputs:
       distro:
@@ -38,7 +37,7 @@ on:
           - foxy
           - humble
       version:
-        description: 'Version (X.Y.Z) — the tag/release becomes <distro>-v<version>'
+        description: 'Version (X.Y.Z) — the tag/release becomes deep-robotics-m20-<distro>-v<version>'
         required: true
         type: string
 
@@ -50,24 +49,31 @@ jobs:
   release:
     runs-on: ubuntu-24.04-arm
     steps:
-      - name: Resolve distro, version, image name
+      - name: Resolve target, distro, version, image name
         id: rv
         env:
           IN_DISTRO: ${{ inputs.distro }}
           IN_VERSION: ${{ inputs.version }}
         run: |
+          target="deep-robotics-m20"
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             distro="${IN_DISTRO}"
             version="${IN_VERSION}"
           else
             tag="${GITHUB_REF_NAME}"
-            distro="${tag%%-v*}"
-            version="${tag#*-v}"
+            version="${tag##*-v}"
+            base="${tag%-v${version}}"          # deep-robotics-m20-<distro>
+            distro="${base##*-}"
           fi
-          echo "distro=${distro}"          >> "${GITHUB_OUTPUT}"
-          echo "version=${version}"        >> "${GITHUB_OUTPUT}"
-          echo "tag=${distro}-v${version}" >> "${GITHUB_OUTPUT}"
-          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fslam-rtk" >> "${GITHUB_OUTPUT}"
+          case "${distro}" in
+            foxy|humble|jazzy) ;;
+            *) echo "::error::cannot parse distro from '${GITHUB_REF_NAME}' (want ${target}-<distro>-vX.Y.Z)"; exit 1 ;;
+          esac
+          echo "target=${target}"                    >> "${GITHUB_OUTPUT}"
+          echo "distro=${distro}"                    >> "${GITHUB_OUTPUT}"
+          echo "version=${version}"                  >> "${GITHUB_OUTPUT}"
+          echo "tag=${target}-${distro}-v${version}" >> "${GITHUB_OUTPUT}"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/rtk_only" >> "${GITHUB_OUTPUT}"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -98,7 +104,7 @@ jobs:
           echo "driver_tag=${driver_tag}" >> "${GITHUB_OUTPUT}"
           echo "dver=${dver}"             >> "${GITHUB_OUTPUT}"
 
-      - name: Assemble rtk bundle
+      - name: Assemble rtk_only native bundle
         env:
           DISTRO: ${{ steps.rv.outputs.distro }}
           VERSION: ${{ steps.rv.outputs.version }}
@@ -106,57 +112,57 @@ jobs:
           DVER: ${{ steps.drv.outputs.dver }}
         run: |
           if [ "${DISTRO}" != "foxy" ]; then
-            echo "::error::rtk bundle assembly for '${DISTRO}' is not wired yet (only foxy)"
+            echo "::error::rtk_only bundle assembly for '${DISTRO}' is not wired yet (only foxy)"
             exit 1
           fi
-          root="bundle-rtk/fslam-rtk-${DISTRO}"
+          root="bundle-rtk/rtk_only-${DISTRO}"
           mkdir -p "${root}/fslam/lib" "${root}/fslam/config/fixposition" "${root}/fslam/systemd"
           tar -xzf "dl/fixposition-driver-m20_${DVER}_${DISTRO}_arm64.tar.gz" -C "${root}"
           mv "${root}/fixposition-driver-m20" "${root}/driver"
-          cp run_m20_foxy.sh                        "${root}/fslam/"
+          cp run_rtk_only_native.sh                 "${root}/fslam/"
           cp lib/deploy_common.sh                   "${root}/fslam/lib/"
           cp config/fixposition/config_m20.yaml     "${root}/fslam/config/fixposition/"
           cp config/fixposition/robot.urdf          "${root}/fslam/config/fixposition/"
-          cp systemd/m20_loc_foxy.service           "${root}/fslam/systemd/"
+          cp systemd/rtk_only.service               "${root}/fslam/systemd/"
           {
-            echo "# fslam rtk-mode bundle (fslam ${VERSION}, driver ${DRIVER_TAG}, ${DISTRO})"
+            echo "# rtk_only native bundle (deep-robotics-m20 ${VERSION}, driver ${DRIVER_TAG}, ${DISTRO})"
             echo
-            echo "rtk (fixposition-only) mode: the forked driver delivers the OEM three-topic"
+            echo "Mode rtk_only, form native: the forked driver delivers the OEM three-topic"
             echo "contract on its own. Run in place (driver/ is a drop-in WS):"
             echo
             echo '```bash'
-            echo "WS=\"\$(pwd)/driver\" ./fslam/run_m20_foxy.sh"
+            echo "WS=\"\$(pwd)/driver\" ./fslam/run_rtk_only_native.sh"
             echo '```'
             echo
-            echo "As a service: install fslam/systemd/m20_loc_foxy.service and override its"
-            echo "paths with a drop-in:"
+            echo "As a service: install fslam/systemd/rtk_only.service and override its paths"
+            echo "with a drop-in:"
             echo
             echo '```ini'
-            echo "# /etc/systemd/system/m20_loc_foxy.service.d/bundle.conf"
+            echo "# /etc/systemd/system/rtk_only.service.d/bundle.conf"
             echo "[Service]"
             echo "Environment=WS=/path/to/bundle/driver"
             echo "ExecStart="
-            echo "ExecStart=/bin/bash /path/to/bundle/fslam/run_m20_foxy.sh"
+            echo "ExecStart=/bin/bash /path/to/bundle/fslam/run_rtk_only_native.sh"
             echo '```'
             echo
             echo "Foxy notes: the driver tree ships no drdds (the robot's system drdds is used)"
             echo "and no python typesupport (no 'ros2 topic echo' of fixposition custom msgs)."
           } > "${root}/README.md"
 
-      - name: No-source audit (rtk bundle)
+      - name: No-source audit (rtk_only bundle)
         run: |
           bad="$(find bundle-rtk \( -type d -name include \) -print -o \
             \( -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' \
                -o -name '*.h' -o -name '*.hpp' -o -name '*.hh' -o -name '*.hxx' \) \) -print -o \
             \( -type f -name '*.py' ! -name '_local_setup_util*' \) -print)"
           if [ -n "${bad}" ]; then
-            echo "::error::source files found in the rtk bundle:"
+            echo "::error::source files found in the rtk_only bundle:"
             echo "${bad}"
             exit 1
           fi
-          echo "rtk bundle audit clean"
+          echo "rtk_only bundle audit clean"
 
-      - name: Assemble slam bundle (deployment layer; image pinned, not shipped)
+      - name: Assemble fslam bundle (deployment layer; image pinned, not shipped)
         id: slam
         env:
           VERSION: ${{ steps.rv.outputs.version }}
@@ -166,25 +172,23 @@ jobs:
             exit 1
           fi
           slam_image="$(tr -d '[:space:]' < SLAM_IMAGE)"
-          root="bundle-slam/fslam-slam"
-          mkdir -p "${root}"
+          root="bundle-fslam/fslam"
+          mkdir -p "${root}/lib" "${root}/host" "${root}/systemd" "${root}/config"
           # 布局镜像仓库根,BASE_DIR 相对路径才成立 | mirror the repo root so the
           # launcher's BASE_DIR-relative paths keep working
-          cp run_fast_lio_pgo_prod.sh "${root}/"
-          mkdir -p "${root}/lib" "${root}/host" "${root}/systemd"
+          cp run_fslam.sh                  "${root}/"
           cp lib/deploy_common.sh          "${root}/lib/"
           cp host/fp_to_odom.py            "${root}/host/"
           cp host/motion_info_to_twist.py  "${root}/host/"
           cp -r container                  "${root}/container"
-          mkdir -p "${root}/config"
           cp -r config/dds config/slam config/fixposition "${root}/config/"
-          cp systemd/fslam_loc.service     "${root}/systemd/"
+          cp systemd/fslam.service         "${root}/systemd/"
           cp SLAM_IMAGE                    "${root}/"
           {
-            echo "# fslam slam-mode bundle (fslam ${VERSION})"
+            echo "# fslam bundle (deep-robotics-m20 ${VERSION})"
             echo
-            echo "fslam (SLAM) mode: LIO-SLAM (FAST-LIO + PGO) in a Humble container with its"
-            echo "internal upstream fixposition driver, plus host-side glue nodes."
+            echo "Mode fslam, form docker: LIO-SLAM (FAST-LIO + PGO) in a Humble container with"
+            echo "its internal upstream fixposition driver, plus host-side glue nodes."
             echo
             echo "Pinned image: ${slam_image} (see SLAM_IMAGE)."
             echo "The image is NOT part of this release — it lives in a private registry."
@@ -199,32 +203,32 @@ jobs:
             echo "Run (repo-root layout is preserved, so the launcher works in place):"
             echo
             echo '```bash'
-            echo "./run_fast_lio_pgo_prod.sh --image ${slam_image}"
-            echo "./run_fast_lio_pgo_prod.sh --check     # verify the running deployment"
+            echo "./run_fslam.sh --image ${slam_image}"
+            echo "./run_fslam.sh --check     # verify the running deployment"
             echo '```'
             echo
-            echo "As a service: install systemd/fslam_loc.service (adjust ExecStart if the"
-            echo "bundle is not at /home/user/fslam). It conflicts with the rtk-mode units —"
-            echo "all localization modes publish /ODOM and only one may run."
+            echo "As a service: install systemd/fslam.service (adjust ExecStart if the bundle"
+            echo "is not at /home/user/fslam). It conflicts with the rtk_only units — every"
+            echo "localization mode publishes /ODOM and only one may run."
           } > "${root}/README.md"
           echo "slam_image=${slam_image}" >> "${GITHUB_OUTPUT}"
 
-      - name: No-source audit (slam bundle)
+      - name: No-source audit (fslam bundle)
         run: |
           # host/*.py 是本仓库公开的部署胶水,允许;C/C++/头文件仍然禁止。
           # host/*.py is this repo's own public deployment glue and is allowed;
           # C/C++ sources and headers are still forbidden.
-          bad="$(find bundle-slam \( -type d -name include \) -print -o \
+          bad="$(find bundle-fslam \( -type d -name include \) -print -o \
             \( -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' \
                -o -name '*.h' -o -name '*.hpp' -o -name '*.hh' -o -name '*.hxx' \) \) -print)"
           if [ -n "${bad}" ]; then
-            echo "::error::C/C++ source or headers found in the slam bundle:"
+            echo "::error::C/C++ source or headers found in the fslam bundle:"
             echo "${bad}"
             exit 1
           fi
-          echo "slam bundle audit clean"
+          echo "fslam bundle audit clean"
 
-      - name: Build rtk docker image on the driver release image
+      - name: Build rtk_only docker image on the driver release image
         env:
           DISTRO: ${{ steps.rv.outputs.distro }}
           VERSION: ${{ steps.rv.outputs.version }}
@@ -239,7 +243,7 @@ jobs:
             -t "${IMAGE}:${DISTRO}-${VERSION}" \
             -t "${IMAGE}:${DISTRO}-latest" .
 
-      - name: No-source audit (rtk image)
+      - name: No-source audit (rtk_only image)
         env:
           DISTRO: ${{ steps.rv.outputs.distro }}
           VERSION: ${{ steps.rv.outputs.version }}
@@ -252,11 +256,11 @@ jobs:
                -o -name '*.h' -o -name '*.hpp' -o -name '*.hh' -o -name '*.hxx' \) \) -print -o \
             \( -type f -name '*.py' ! -name '_local_setup_util*' \) -print)"
           if [ -n "${bad}" ]; then
-            echo "::error::source files found in the rtk image:"
+            echo "::error::source files found in the rtk_only image:"
             echo "${bad}"
             exit 1
           fi
-          echo "rtk image audit clean"
+          echo "rtk_only image audit clean"
 
       - name: Pack assets
         env:
@@ -265,13 +269,13 @@ jobs:
           IMAGE: ${{ steps.rv.outputs.image }}
         run: |
           mkdir -p out
-          tar -C bundle-rtk  -czf "out/fslam-rtk_${VERSION}_${DISTRO}_arm64.tar.gz" "fslam-rtk-${DISTRO}"
-          tar -C bundle-slam -czf "out/fslam-slam_${VERSION}_arm64.tar.gz" "fslam-slam"
+          tar -C bundle-rtk   -czf "out/rtk_only_${VERSION}_${DISTRO}_arm64.tar.gz" "rtk_only-${DISTRO}"
+          tar -C bundle-fslam -czf "out/fslam_${VERSION}_arm64.tar.gz" "fslam"
           docker save "${IMAGE}:${DISTRO}-${VERSION}" | gzip \
-            > "out/fslam-rtk_${VERSION}_${DISTRO}_arm64_docker-image.tar.gz"
+            > "out/rtk_only_${VERSION}_${DISTRO}_arm64_docker-image.tar.gz"
           ( cd out && sha256sum ./* > SHA256SUMS.txt && cat SHA256SUMS.txt )
 
-      - name: Push rtk image to ghcr.io
+      - name: Push rtk_only image to ghcr.io
         env:
           DISTRO: ${{ steps.rv.outputs.distro }}
           VERSION: ${{ steps.rv.outputs.version }}
@@ -293,24 +297,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           {
-            echo "M20 localization deployment (arm64) — both mode toolchains in one release."
+            echo "deep-robotics-m20 localization deployment (arm64, ${DISTRO}) — both modes in one release."
             echo
-            echo "| mode | what runs | source of binaries | assets |"
+            echo "| mode | form | binaries from | asset |"
             echo "|---|---|---|---|"
-            echo "| **rtk** (fixposition-only) | forked driver, native ${DISTRO} | driver release **${DRIVER_TAG}** (SHA256-verified, no source) | \`fslam-rtk_${VERSION}_${DISTRO}_arm64.tar.gz\` + \`..._docker-image.tar.gz\` (also \`${IMAGE}:${DISTRO}-${VERSION}\`) |"
-            echo "| **fslam** (SLAM) | LIO-SLAM Humble container + host glue | pinned image \`${SLAM_IMAGE_REF}\` (private registry, **not attached**) | \`fslam-slam_${VERSION}_arm64.tar.gz\` (deployment layer) |"
+            echo "| **rtk_only** | native | driver release **${DRIVER_TAG}** (SHA256-verified, no source) | \`rtk_only_${VERSION}_${DISTRO}_arm64.tar.gz\` |"
+            echo "| **rtk_only** | docker | same, config baked | \`..._docker-image.tar.gz\` / \`${IMAGE}:${DISTRO}-${VERSION}\` |"
+            echo "| **fslam** | docker | pinned image \`${SLAM_IMAGE_REF}\` (private registry, **not attached**) | \`fslam_${VERSION}_arm64.tar.gz\` (deployment layer) |"
             echo
-            echo "## rtk mode"
+            echo "## rtk_only · native"
             echo '```bash'
-            echo "tar -xzf fslam-rtk_${VERSION}_${DISTRO}_arm64.tar.gz && cd fslam-rtk-${DISTRO}"
-            echo "WS=\"\$(pwd)/driver\" ./fslam/run_m20_foxy.sh"
+            echo "tar -xzf rtk_only_${VERSION}_${DISTRO}_arm64.tar.gz && cd rtk_only-${DISTRO}"
+            echo "WS=\"\$(pwd)/driver\" ./fslam/run_rtk_only_native.sh"
             echo '```'
             echo
-            echo "## fslam (SLAM) mode"
+            echo "## rtk_only · docker"
             echo '```bash'
-            echo "tar -xzf fslam-slam_${VERSION}_arm64.tar.gz && cd fslam-slam"
+            echo "docker load < rtk_only_${VERSION}_${DISTRO}_arm64_docker-image.tar.gz"
+            echo "docker run -d --name rtk_only --restart unless-stopped \\"
+            echo "    --network host -v /dev/shm:/dev/shm ${IMAGE}:${DISTRO}-${VERSION}"
+            echo '```'
+            echo
+            echo "## fslam · docker"
+            echo '```bash'
+            echo "tar -xzf fslam_${VERSION}_arm64.tar.gz && cd fslam"
             echo "# image ships separately (private registry) — see the bundle README"
-            echo "./run_fast_lio_pgo_prod.sh --image ${SLAM_IMAGE_REF}"
+            echo "./run_fslam.sh --image ${SLAM_IMAGE_REF}"
             echo '```'
             echo
             echo "Only one localization mode may run at a time — every mode publishes /ODOM."
@@ -318,6 +330,6 @@ jobs:
           } > notes.md
           gh release create "${TAG}" \
             --target "${GITHUB_SHA}" \
-            --title "fslam ${DISTRO} v${VERSION} (rtk + slam toolchains)" \
+            --title "deep-robotics-m20 ${DISTRO} v${VERSION} (rtk_only + fslam)" \
             --notes-file notes.md \
             out/*
