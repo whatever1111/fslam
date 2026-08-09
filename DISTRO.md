@@ -1,70 +1,63 @@
-# fslam 发行版分支:foxy | Distro branch: foxy
+# 发行版叶子:deep-robotics-m20-foxy | Distro leaf: deep-robotics-m20-foxy
 
-本分支是 fslam 的 **ROS 2 Foxy** 配对分支,与 fixposition driver 的同发行版分支/发布线绑定。
-This is the **ROS 2 Foxy** pairing branch of fslam, tied to the same-distro branch and
-release line of the fixposition driver fork.
+本分支是 **deep-robotics-m20 产品主干的 ROS 2 Foxy 叶子**:主干载荷 + 本发行版的钉版文件。
+发布 tag 打在这里:`deep-robotics-m20-foxy-vX.Y.Z`。
+This is the **ROS 2 Foxy leaf of the deep-robotics-m20 trunk**: the trunk payload plus this
+distro's pin files. Release tags go here: `deep-robotics-m20-foxy-vX.Y.Z`.
 
-| fslam 分支 | driver 分支 | driver 发布线 | 部署形态 |
+| 分支 branch | 角色 role | driver fork 配对 pairing | 发布 tag |
 |---|---|---|---|
-| `main` | `m20` (trunk) | — | 可移植主干 | portable trunk |
-| **`foxy`(本分支 this branch)** | `m20-foxy` | `foxy-v*` | 狗上原生 native on the robot |
-| `humble`(未建 not yet) | `m20-humble` | `humble-v*` | 容器 container (`fslam-m20:<arch>`) |
-| `jazzy`(未建 not yet) | `m20-jazzy` | `jazzy-v*` | 未开始 not started |
+| `main` | 通用机制 generic machinery | — | — |
+| `deep-robotics-m20` | 产品主干(载荷)product trunk | `m20`(trunk)| — |
+| **`deep-robotics-m20-foxy`(本分支)** | Foxy 叶子(钉版)| `m20-foxy` / release `foxy-v*` | `deep-robotics-m20-foxy-v*` |
+| `deep-robotics-m20-humble`(未建 not yet)| Humble 叶子 | `m20-humble` / `humble-v*` | `deep-robotics-m20-humble-v*` |
 
-为什么 M20 必须 Foxy:OEM 雷达的 `/LIDAR/POINTS` writer 绑在 127.0.0.1;Humble 的
-Fast DDS 2.6 不再为多网卡参与者通告 loopback locator,永远发现不了它;Foxy 的 2.0 可以。
-详见 driver 仓库 `m20-foxy` 分支的 DISTRO.md。
-Why Foxy: the OEM cloud writer is loopback-only; Fast DDS 2.6 (Humble) never discovers it,
-2.0 (Foxy) does. Full story in DISTRO.md on the driver's `m20-foxy` branch.
+本分支独有的文件 | files unique to this leaf:`DRIVER_RELEASE`(rtk_only 用的驱动 release 钉版)、
+本 `DISTRO.md`。模式载荷(启动脚本、unit、配置)都在主干,部署方法见 `DEPLOYMENT.md`。
+Unique to this leaf: `DRIVER_RELEASE` (the driver-release pin for rtk_only) and this file. The mode
+payload lives on the trunk; deployment steps in `DEPLOYMENT.md`.
 
-## 两条部署路径 | Two deployment paths
+## 为什么 M20 必须 Foxy | Why Foxy is required
 
-**A. 狗上编译 | build on the robot**(现行 live 路径,`/home/user/m20_ws`):
+OEM 雷达的 `/LIDAR/POINTS` writer 绑在 127.0.0.1;Humble 的 Fast DDS 2.6 不再为多网卡参与者通告
+loopback locator,**能在 graph 里看到话题、永远收不到数据**(2026-08-08 实测,已排除 `/dev/shm`
+变量);Foxy 的 2.0 可以。详见 driver 仓库 `m20-foxy` 分支的 DISTRO.md。
+The OEM cloud writer is loopback-only; Humble's Fast DDS 2.6 no longer announces a loopback locator
+for multi-NIC participants — **it sees the topic in the graph and never receives a message**
+(measured 2026-08-08 with the `/dev/shm` variable ruled out); Foxy's 2.0 receives fine. Full story
+in DISTRO.md on the driver's `m20-foxy` branch.
 
-```bash
-tools/build_m20_foxy.sh --source /home/user/m20_src   # m20_src = driver 分支 m20-foxy
-sudo systemctl enable --now m20_loc_foxy
-```
+## 本叶子的 Foxy 专属坑 | Foxy-specific traps on this leaf
 
-**B. 二进制发布包 | binary release tarball**(免编译 no compile;狗无公网,包用 scp 送上去):
-
-driver 仓库每个 `foxy-v*` release 附带的 `fixposition-driver-m20_<ver>_foxy_arm64.tar.gz`
-解开后的目录布局(`install/` + `fpsdk/`)与 `run_m20_foxy.sh` 的 WS 约定完全一致,
-可直接当工作区用 —— 已在 106 上实测(2026-08-08,含 rsdriver/hsLidar 重启鲁棒性演练):
-The tarball attached to every `foxy-v*` driver release unpacks to exactly the WS layout
-`run_m20_foxy.sh` expects (`install/` + `fpsdk/`) and works as a drop-in workspace —
-validated live on 106 (2026-08-08, incl. restart-robustness drills):
-
-```bash
-tar -xzf fixposition-driver-m20_<ver>_foxy_arm64.tar.gz -C /home/user/
-WS=/home/user/fixposition-driver-m20 ./run_m20_foxy.sh          # 手动 | by hand
-# 或 systemd:drop-in 里加 Environment=WS=... | or a systemd drop-in with Environment=WS=...
-```
-
-注意 | notes:
-- Foxy 发布包**不含 drdds**(狗上是系统包,再带一份会遮蔽它);容器镜像才自带。
-  The foxy tarball ships **no drdds** (system package on the robot); only the docker image vendors it.
-- 发布包无源码、无 python typesupport → fixposition 自定义消息不能 `ros2 topic echo`;
-  OEM 的 drdds 话题不受影响。
-  Binary-only: no python typesupport → no `ros2 topic echo` of fixposition custom msgs;
-  OEM drdds topics unaffected.
-
-## 本分支 Foxy 专属的坑 | Foxy-specific traps carried by this branch
-
-- `node.launch` 是 Galactic+ 方言,Foxy `launch_xml` 直接拒载 → `run_m20_foxy.sh` 直接
+- `node.launch` 是 Galactic+ 方言,Foxy `launch_xml` 直接拒载 → `run_rtk_only_native.sh` 直接
   `ros2 run` 可执行文件,守护交给 systemd `Restart=`。
+  `node.launch` is Galactic+ dialect and Foxy's `launch_xml` rejects it → the launcher `ros2 run`s
+  the executable directly; systemd `Restart=` supervises.
+- Foxy 的 rcl 不接受含换行的 `-p` 值 → robot_state_publisher 的 URDF 走生成的 params 文件
+  (`rsp_params.yaml`),不走 `-p robot_description:=`。
+  Foxy's rcl rejects multiline `-p` values → the URDF goes in via a generated params file.
 - 狗上 Foxy 无 xacro → 用预展开的 `config/fixposition/robot.urdf`。
-- Foxy 的 `ros2 topic echo` 没有 `--once`/`--field`(Galactic+ 才有);探针还会阶段性
-  "聋" —— 验证以 graph info + `/LOCATION_STATUS` 的 `meta.frame_id` 计数为准。
+  No xacro on the robot's Foxy → the pre-expanded URDF ships in config.
+- Foxy 的 `ros2 topic echo` 没有 `--once`/`--field`(Galactic+ 才有);探针还会阶段性"聋" ——
+  验证以 graph info + `/LOCATION_STATUS` 的 `meta.frame_id` 计数为准。
+  Foxy's `ros2 topic echo` lacks `--once`/`--field`; probes go deaf in phases — trust graph info
+  and the `meta.frame_id` counter.
+- rtk_only 的 foxy 驱动包**不含 drdds**(狗上是系统包,带了会遮蔽)、无 python typesupport
+  (fixposition 自定义消息不能 `ros2 topic echo`)。
+  The foxy driver tarball ships no drdds (system package on the robot) and no python typesupport.
 - distro→driver 分支映射:`lib/deploy_common.sh` 的 `fslam_driver_branch()`。
 
-主干原则不变:能写成可移植的就进 `main`,发行版分支只留真正分叉的东西。
-Trunk rule unchanged: portable things go to `main`; distro branches carry only true divergence.
+## 发布 | Cutting a release
 
-**模式不设分支 | No branches per mode:** fslam 支持两种模式(rtk-only 与 fslam/SLAM),但模式是
-**运行时维度**——两种模式共存在同一台狗上,靠 systemd 单元切换(全部发 `/ODOM`,互斥)。给模式开
-分支会迫使"切模式 = 换 checkout",还会复制共享的 lib/config。分支轴只留给 ROS 发行版。
-fslam supports two modes (rtk-only and fslam/SLAM), but mode is a **runtime axis** — both coexist
-on one robot and are switched by systemd unit (all publish `/ODOM`, mutually exclusive). A branch
-per mode would make switching a checkout and duplicate shared lib/config. The branch axis is
-reserved for the ROS distro.
+```bash
+# 在本分支上 | on this leaf:
+echo foxy-v1.0.1 > DRIVER_RELEASE            # 需要换驱动版本时 | when bumping the driver
+git tag deep-robotics-m20-foxy-v1.2.0 deep-robotics-m20-foxy
+git push origin deep-robotics-m20-foxy deep-robotics-m20-foxy-v1.2.0
+```
+
+主干原则:能可移植的进 `main` 或产品主干,叶子只留真正分叉的东西(钉版 + 本文件)。
+模式(rtk_only/fslam)是运行时维度,靠 systemd 单元切换 —— 永远不设模式分支。
+Trunk rule: portable things go to `main` or the product trunk; a leaf carries only true divergence
+(pins + this file). Modes (rtk_only/fslam) are a runtime axis switched by systemd unit — never
+branches.
