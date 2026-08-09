@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # ============================================================================
 # deploy_common.sh —— fslam 部署脚本共享函数 | shared helpers for the deploy
-# scripts (sourced by run_fixposition_prod.sh / run_fast_lio_pgo_prod.sh).
+# scripts (sourced by run_fixposition_prod.sh / run_fslam.sh).
 # 所有路径由调用方从 checkout 位置推导,本文件不含任何绝对路径。
 # All paths are derived by the callers from the checkout location — this file
 # contains no absolute paths.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# run_m20_foxy.sh —— M20 定位模式(Foxy 原生,无容器)
+# run_rtk_only_native.sh —— M20 定位模式(Foxy 原生,无容器)
 #                    M20 mode, native on Foxy — no container
 # ============================================================================
 # 驱动进程自己发 /ODOM、/LOC_BODY_POINTS、/LOCATION_STATUS,并直接吃 /MOTION_INFO。
@@ -18,7 +18,7 @@
 #
 # 环境变量 | environment overrides:
 #   WS ROS_SETUP FIXPOSITION_CONFIG_DIR LOG_DIR ROS_DOMAIN_ID
-# 停止 | stop: systemctl stop m20_loc_foxy   (或 kill 掉 pid 文件里的进程)
+# 停止 | stop: systemctl stop rtk_only   (或 kill 掉 pid 文件里的进程)
 # ============================================================================
 set -euo pipefail
 
@@ -30,14 +30,14 @@ WS="${WS:-/home/user/m20_ws}"
 ROS_SETUP="${ROS_SETUP:-/opt/ros/foxy/setup.bash}"
 SDK_PREFIX="${SDK_PREFIX:-${WS}/fpsdk}"
 FIXPOSITION_CONFIG_DIR="${FIXPOSITION_CONFIG_DIR:-${BASE_DIR}/config/fixposition}"
-LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs/m20_foxy}"
+LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs/rtk_only}"
 ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
 # ---- 预检 | pre-checks ------------------------------------------------------
 [[ -f "${ROS_SETUP}" ]] || { echo "[ERROR] 没找到 ROS2 | ROS 2 not found: ${ROS_SETUP}" >&2; exit 1; }
 [[ -f "${WS}/install/setup.bash" ]] \
   || { echo "[ERROR] 工作区没编 | workspace not built: ${WS}" >&2
-       echo "[ERROR] 先编译 | build it first: tools/build_m20_foxy.sh --source <driver checkout>" >&2; exit 1; }
+       echo "[ERROR] 先编译 | build it first: tools/build_rtk_only_native.sh --source <driver checkout>" >&2; exit 1; }
 for f in config_m20.yaml robot.urdf; do
   [[ -f "${FIXPOSITION_CONFIG_DIR}/${f}" ]] \
     || { echo "[ERROR] 配置缺失 | missing config: ${FIXPOSITION_CONFIG_DIR}/${f}" >&2; exit 1; }
