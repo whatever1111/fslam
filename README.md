@@ -1,60 +1,67 @@
 # fslam — 机器人定位部署项目 | Robot localization deployment project
 
-一个仓库承载**多个机器人目标**的定位部署。`main` 只放所有目标共享的通用机制;每个部署目标
-一条**产品主干分支**(载荷:启动脚本、配置、systemd 单元、文档),其下按 ROS 发行版分**叶子
-分支**(只放钉版文件)。发布 tag 打在叶子上。
+一个仓库承载**多个机器人目标**的定位部署。全局只有两个模式名:**`rtk_only`** 与 **`fslam`**;
+每个模式给出 **native** 和 **docker** 两种部署形态(能给的都给)。`main` 只放所有目标共享的
+通用机制;每个部署目标一条**产品主干分支**,其下按 ROS 发行版分**叶子分支**。
 
-One repo hosting localization deployment for **multiple robot targets**. `main` carries only the
-machinery every target shares; each deployment target gets a **product trunk branch** (payload:
-launchers, config, systemd units, docs) with **distro leaf branches** under it (pin files only).
-Release tags go on leaves.
+One repo hosting localization deployment for **multiple robot targets**. There are exactly two
+mode names, globally: **`rtk_only`** and **`fslam`**; each mode ships in **native** and **docker**
+form wherever possible. `main` carries only machinery shared by every target; each target gets a
+**product trunk branch** with **distro leaf branches** under it.
+
+## 模式 × 形态 | Mode × form
+
+| 模式 mode | 定位来源 what localizes | native | docker |
+|---|---|---|---|
+| **`rtk_only`** | RTK/INS(fixposition 驱动直接交付输出契约 the driver delivers the output contract itself)| ✅ 驱动二进制 release 直跑 driver binary release | ✅ 驱动 release 镜像 + 烘焙配置 driver release image + baked config |
+| **`fslam`** | SLAM(LIO-SLAM:FAST-LIO + PGO;容器内用上游原版 fixposition 驱动)| —(SLAM 按设计容器化 containerized by design)| ✅ LIO-SLAM 镜像 + 宿主机胶水 image + host glue |
+
+同一目标上两模式互斥(都发同一里程话题),靠 systemd 单元切换 —— 模式是运行时维度,不是分支。
+On one target the modes are mutually exclusive (same odometry topic) and switch by systemd unit —
+mode is a runtime axis, never a branch.
+
+## 命名规则 | Naming rules
+
+全局统一用这两个 token,禁止别名(不再有 "m20 模式"、"fp-only"、"rtk" 等旧叫法):
+The two tokens are used verbatim everywhere; no aliases (no more "m20 mode", "fp-only", "rtk"):
+
+| 东西 thing | 规则 rule | 例 example |
+|---|---|---|
+| 启动脚本 launchers | `run_<mode>[_<form>].sh` | `run_rtk_only_native.sh` · `run_fslam.sh` |
+| systemd 单元 units | `<mode>.service` | `rtk_only.service` · `fslam.service` |
+| 发布资产 assets | `<mode>_<ver>_[<distro>_]arm64[...]` | `rtk_only_1.2.0_foxy_arm64.tar.gz` · `fslam_1.2.0_arm64.tar.gz` |
+| 镜像 images | `<mode>` | `ghcr.io/whatever1111/rtk_only:foxy-<ver>` |
+| 钉版文件 pins | 模式各一 one per mode | `DRIVER_RELEASE`(rtk_only)· `SLAM_IMAGE`(fslam)|
 
 ## 分支模型 | Branch model
 
 ```
-main                                通用机制 | generic machinery (lib/, release workflow, this README)
-└── <vendor>-<robot>                产品主干:该机器人的全部部署载荷 | product trunk: the payload
-    └── <vendor>-<robot>-<distro>   发行版叶子:钉版文件 + DISTRO.md | distro leaf: pins only
+main                                通用机制 | generic machinery (lib/, workflow template, this README)
+└── <vendor>-<robot>                产品主干:载荷 | product trunk: launchers/config/units/docs
+    └── <vendor>-<robot>-<distro>   发行版叶子:钉版 + DISTRO.md | distro leaf: pins only
 ```
 
-| 分支 branch | 内容 contents | 发布 tag |
-|---|---|---|
-| `main` | `lib/deploy_common.sh`、release 流水线模板、本 README | — |
-| `deep-robotics-m20` | 云深处 M20:双模式载荷(rtk + fslam)| — |
-| `deep-robotics-m20-foxy` | 上者 + `DRIVER_RELEASE`/`SLAM_IMAGE` 钉版 + `DISTRO.md` | `deep-robotics-m20-foxy-v*` |
+| 分支 branch | 发布 tag |
+|---|---|
+| `main` | — |
+| `deep-robotics-m20`(云深处 M20,rtk_only native 线上 live)| — |
+| `deep-robotics-m20-foxy` | `deep-robotics-m20-foxy-v*` |
 
-当前目标 | current targets:**deep-robotics-m20**(云深处 M20 机器狗,rtk 模式线上运行)。
-文档入口在各产品主干的 `README.md` / `DEPLOYMENT.md`。
-Docs live on each product trunk (`README.md` / `DEPLOYMENT.md`).
+合并单向:`main` → 主干 → 叶子;**产品分支之间永不互并**;`main` 上禁止产品专属内容。
+Merges flow one way: `main` → trunk → leaf; **product branches never merge into each other**;
+nothing product-specific on `main`.
 
-## 合并规则 | Merge rules
-
-- `main` → 产品主干 → 发行版叶子,单向流;**产品分支之间永不互并**。
-  One direction only: `main` → trunk → leaf; **product branches never merge into each other**.
-- 通用改动(lib、流水线)改在 `main`,往下并;产品改动改在主干,往叶子并;钉版只改叶子。
-  Generic changes land on `main` and flow down; product changes on the trunk; pins on the leaf.
-- `main` 上**禁止出现产品专属内容** —— 否则每个新目标都会继承它。
-  Nothing product-specific may live on `main` — every new target would inherit it.
-
-## 新增部署目标 | Adding a deployment target
+## 新增部署目标 | Adding a target
 
 ```bash
-git checkout -b <vendor>-<robot> main          # 1. 产品主干 | product trunk
-#    加载荷:启动脚本、config/、systemd/、DEPLOYMENT.md,
-#    并按需在 .github/workflows/release.yml 里加该目标的打包步骤
-git checkout -b <vendor>-<robot>-<distro>      # 2. 发行版叶子 | distro leaf
-#    加钉版文件(如 DRIVER_RELEASE / SLAM_IMAGE)+ DISTRO.md
-git tag <vendor>-<robot>-<distro>-v0.1.0       # 3. 发布 | release
+git checkout -b <vendor>-<robot> main      # 1. 主干:加载荷 + 该目标的 release 打包步骤
+git checkout -b <vendor>-<robot>-<distro>  # 2. 叶子:加钉版文件 + DISTRO.md
+git tag <vendor>-<robot>-<distro>-v0.1.0   # 3. 发布(流水线跑 tag 所在 commit 的 workflow)
 ```
-
-tag 格式 `<branch>-v<X.Y.Z>`,流水线从 tag 反解 target/distro/version;运行的是**tag 所在
-commit 上那份 workflow**,所以每个产品分支可以有自己的打包逻辑。
-Tags are `<branch>-v<X.Y.Z>`; the pipeline parses target/distro/version from the tag and runs
-**the workflow at the tagged commit**, so each product branch may carry its own packaging logic.
 
 ## 历史 | History
 
-2026-08-08 之前本仓库是 M20 单目标结构(`main` 带 M20 载荷,分支 `foxy`,tag `foxy-v*`)。
-旧 release(`foxy-v1.0.0`…`foxy-v1.1.0`)保留有效;新 tag 一律用新格式。
-Before 2026-08-08 this repo was single-target (M20 payload on `main`, branch `foxy`, tags
-`foxy-v*`). Old releases remain valid; new tags use the new format.
+2026-08-08 之前:单目标结构(M20 载荷在 `main`,分支 `foxy`,tag `foxy-v*`,资产名
+`fslam-m20_*`/`fslam-rtk_*`)。旧 release 保留有效;新 tag/资产一律用新格式。
+Pre-2026-08-08 this repo was single-target (payload on `main`, branch `foxy`, `foxy-v*` tags,
+`fslam-m20_*`/`fslam-rtk_*` assets). Old releases stay valid; everything new uses the new names.
