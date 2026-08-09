@@ -1,0 +1,58 @@
+# ============================================================================
+# fslam_loc.service —— 开机自启 fslam(SLAM)定位链路
+#                      boot-start the fslam (SLAM) localization chain
+# ----------------------------------------------------------------------------
+# 模式 | mode:LIO-SLAM(FAST-LIO + PGO)Humble 容器 + 宿主机胶水节点。容器内
+# 用的是镜像自带的上游 fixposition 驱动;fork 的驱动只属于 rtk 模式。
+# The LIO-SLAM (FAST-LIO + PGO) Humble container plus host-side glue nodes. The
+# container uses its own internal upstream fixposition driver; the forked driver
+# belongs to rtk mode only.
+#
+# 假设仓库克隆在 /home/user/fslam。四种定位服务都发 /ODOM,任何时候只能
+# enable 一个。Assumes the repo at /home/user/fslam. All four localization
+# units publish /ODOM — only one may be enabled at a time.
+#
+# 安装 | install:
+#   sudo systemctl disable --now rtk_loc m20_loc m20_loc_foxy
+#   sudo cp systemd/fslam_loc.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now fslam_loc
+# 验证 | verify: /home/user/fslam/run_fast_lio_pgo_prod.sh --check
+# ============================================================================
+[Unit]
+Description=fslam Localization Service (LIO-SLAM container + host glue)
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# 都发 /ODOM | they all publish /ODOM
+Conflicts=rtk_loc.service m20_loc.service m20_loc_foxy.service
+
+[Service]
+# 启动脚本把容器(--restart unless-stopped)和宿主机节点(pid 文件)拉起后
+# 即退出 → oneshot + RemainAfterExit(active=已部署)。
+# The launcher exits once the container (docker restart policy) and host nodes
+# (pid files) are up → oneshot + RemainAfterExit means active = deployed.
+Type=oneshot
+RemainAfterExit=yes
+User=root
+
+# 等物理网卡拿到 IP | wait for a physical NIC to get an IP
+ExecStartPre=/bin/bash -c "echo '[INFO] waiting for physical network IP...'; while ! ip -4 addr show | grep -E '^[0-9]+: (eth|en)' -A 2 | grep -q 'inet '; do sleep 1; done; echo '[INFO] IP found'"
+# DDS 组播路由钉到通信网卡 | pin the DDS multicast route to the comms NIC
+ExecStartPre=/sbin/ip route replace 224.0.0.0/4 dev eth0
+# 给 OEM rsdriver 一点时间建 writer(整机上电竞态)| give the OEM rsdriver time
+# to create its writers at whole-robot power-on
+ExecStartPre=/bin/sleep 10
+
+ExecStart=/bin/bash /home/user/fslam/run_fast_lio_pgo_prod.sh
+# 容器交给 docker 停;宿主机节点按脚本名清 —— 只在本服务停止时触发,rtk_loc
+# (也用 fp_to_odom.py)因 Conflicts= 不会同时在跑。
+# The container stops via docker; host nodes by script name — this only fires
+# when THIS unit stops, and rtk_loc (which also uses fp_to_odom.py) can never
+# be running at the same time thanks to Conflicts=.
+ExecStop=/bin/bash -c "docker stop fslam-runtime 2>/dev/null; docker rm fslam-runtime 2>/dev/null; pkill -f 'host/fp_to_odom.py' 2>/dev/null; pkill -f 'host/motion_info_to_twist.py' 2>/dev/null; exit 0"
+TimeoutStartSec=300
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

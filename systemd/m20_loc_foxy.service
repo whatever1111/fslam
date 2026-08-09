@@ -19,7 +19,7 @@ Description=M20 Localization Service (fslam, native Foxy)
 Wants=network-online.target
 After=network-online.target
 # 都发 /ODOM | all of these publish /ODOM
-Conflicts=rtk_loc.service m20_loc.service
+Conflicts=rtk_loc.service m20_loc.service fslam_loc.service
 
 [Service]
 # 容器版是 oneshot(起完容器就退,靠 docker 的 restart policy 保活);这里驱动是本

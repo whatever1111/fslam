@@ -1,0 +1,185 @@
+fast_lio_pgo:
+  ros__parameters:
+    # Keyframe selection
+    keyframe_dist_thresh: 1.0
+    keyframe_angle_thresh: 0.2
+
+    # Reference odometry fusion — fp-demo bag uses /fixposition/odometry_enu
+    # which provides full-coverage cov (no -1 invalid markers)
+    gps_topic: "/fixposition/odometry_enu"
+    use_gps: true
+    use_gps_elevation: true
+    gps_cov_threshold: 5.0
+    gps_add_interval: 0.5
+    initial_yaw_deg: .NaN
+    use_gnss_heading: true
+    gnss_heading_min_travel: 0.3
+    lidar_time_offset: 0.0
+
+    # Loop closure
+    loop_closure_enabled: true
+    loop_closure_frequency: 1.0
+    scan_context_dist_threshold: 0.10        # tightened from 0.15 — repetitive warehouse geometry
+    scan_context_num_candidates: 5           # was 10; fewer candidates = less VGICP work per loop_timer tick
+    scan_context_exclude_recent_num: 30
+    history_keyframe_fitness_score: 0.3
+    history_keyframe_search_radius: 15.0
+    # Cap VGICP iterations to bound per-callback latency. 20 iters trims the
+    # worst-case PGO SENSOR_TO_PGO latency from ~250 ms to ~100 ms; loops
+    # that need >20 iters to converge are almost always wrong matches anyway.
+    loop_max_iterations: 20
+    # CRITICAL: header default 30 m makes fitness score meaningless (every source
+    # point can find some target within 30 m) → wrong loops pass fitness gate
+    # → catastrophic divergence (186 km cascade observed without this).
+    loop_max_correspondence_distance: 1.5
+    loop_callback_warn_ms: 150.0
+    # Loop cooldown: kill near-duplicate accepted loops (e.g. 706->29, 707->28,
+    # 710->23, 712->20 in v6 — all retreading the same closure neighborhood).
+    loop_cooldown_query_kf: 5                # min keyframe gap since last accepted loop
+    loop_cooldown_match_neighborhood: 5      # min keyframe gap from last accepted match
+
+    # BetweenFactor noise (variance, not sigma)
+    between_noise_rot: 1.0e-3
+    between_noise_xy: 0.01
+    between_noise_z: 1.0e-3
+
+    # Loop closure Hessian-based anisotropic noise disabled by default
+    loop_hessian_eigenvalue_ratio: 0.0
+    enu_yaw_tau: 5.0
+
+    # Reference covariance floor — odometry_enu provides meaningful per-sample
+    # cov (sigma 0.01-3m by RTK status); honor reported values directly.
+    gps_xy_var_floor: 1.0e-3
+    gps_z_var_floor: 1.0e-3
+
+    # Status-aware GPS floor: FIX (σ≈1cm) gets tight floor, FLOAT/SPP looser.
+    gps_status_aware: true
+    gps_floor_xy_fix: 1.0e-4
+    gps_floor_z_fix: 1.0e-4
+    gps_floor_xy_float: 5.0e-2
+    gps_floor_z_float: 1.0e-1
+    gps_floor_xy_ppp: 1.0
+    gps_floor_z_ppp: 4.0
+    gps_floor_xy_fused: 4.0
+    gps_floor_z_fused: 9.0
+
+    # FIX-recovery: on non-FIX → FIX transition, absorb accumulated drift.
+    #   * drift ≤ 0.5 m  → one-shot σ=3mm snap factor
+    #   * drift > 0.5 m  → 10-frame σ≈5cm gradual window (avoids iSAM2 divergence)
+    gps_floor_xy_fix_recovery: 1.0e-5
+    gps_floor_z_fix_recovery:  1.0e-5
+    gps_fix_recovery_max_drift: 0.5
+    gps_floor_xy_fix_recovery_gradual: 2.5e-3
+    gps_floor_z_fix_recovery_gradual:  2.5e-3
+    gps_fix_recovery_gradual_count: 10
+    # Hysteresis: require N consecutive non-FIX factors before recovery can
+    # re-fire. Suppresses brief FIX flickers (single status=8 samples inside a
+    # long non-FIX gap) from spuriously consuming the recovery window.
+    gps_fix_recovery_min_non_fix_streak: 5
+
+    # Loop GPS sanity gate: reject loops whose ICP-derived relative disagrees
+    # with the RTK-derived relative by > 3m, when both endpoints have stored
+    # FIX-quality GPS. Catches ScanContext false positives in repetitive geometry.
+    loop_gps_consistency_max_disagreement: 3.0
+    loop_gps_consistency_min_status: 8
+
+    # No wheel odometry in the current xsw bag
+    use_twist_odom: false
+    twist_topic: "/lio/twist"
+    twist_noise_rot: 0.10
+    twist_noise_xy: 0.50
+    twist_noise_z: 1.00
+    twist_extrinsic_rot: [1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0]
+
+    # Odometry covariance clamping
+    odom_cov_floor: 1.0e-2
+    odom_cov_ceiling: 1.0
+
+fast_lio_pgo_imu_preint:
+  ros__parameters:
+    imu_topic: "/fixposition/fpa/rawimu"
+    imu_input_type: "fixposition_fpa"
+    imu_bias_topic: "/fixposition/fpa/imubias"
+    imu_time_offset: 0.0
+    correction_odom_topic: "/Odometry"
+
+    # Reuse current baseline IMU noise until xsw-specific tuning is available
+    imu_acc_noise: 0.00399
+    imu_gyr_noise: 0.00156
+    imu_acc_bias_n: 6.44e-5
+    imu_gyr_bias_n: 3.56e-5
+    imu_gravity: 9.80511
+    # FPA IMU reports SI acceleration units (m/s^2)
+    imu_acc_scale: 1.0
+
+    # Keep identity until xsw extrinsic is validated
+    extrinsic_rot: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
+
+    correction_noise: [0.05, 0.05, 0.05, 0.1, 0.1, 0.1]
+    imu_gap_threshold: 10.0
+    correction_stale_threshold: 1.0
+
+fast_lio_pgo_fusion:
+  ros__parameters:
+    odom_frame: "odom"
+    base_frame: "autocube_link"
+    map_frame: "map"
+    publish_map_to_odom_tf: true
+
+    high_rate_odom: false
+    pgo_odom_topic: "/fast_lio_pgo/odometry"
+    lidar_odom_topic: "/Odometry"
+
+    use_relocalization: true
+
+    pgo_gap_to_recover_sec: 5.0
+    pgo_recover_duration_sec: 3.0
+    pgo_recover_alpha: 0.1
+
+    pgo_smooth_tau: 0.2
+    pgo_snap_threshold: 1.0
+
+    max_fusion_speed: 5.0
+
+    runtime_bias_fusion_enable: false
+    runtime_bias_correction_mode_enable: false
+    runtime_bias_xy_tau: 5.0
+    runtime_bias_yaw_tau: 5.0
+    runtime_bias_max_xy_speed: 0.10
+    runtime_bias_max_yaw_rate_deg: 2.0
+    runtime_bias_pgo_min_interval: 0.5
+    runtime_bias_pgo_residual_gate: 2.0
+    runtime_bias_stability_gate: 0.25
+    runtime_bias_min_stable_observations: 3
+    runtime_bias_anomaly_enter_residual: 1.0
+    runtime_bias_anomaly_enter_jump: 1.0
+    runtime_bias_anomaly_enter_spike_speed: 5.0
+    runtime_bias_anomaly_min_persist_count: 3
+    runtime_bias_anomaly_clear_residual: 0.3
+    runtime_bias_anomaly_clear_count: 5
+    runtime_bias_recovery_tau: 2.0
+    runtime_bias_snap_threshold: 1.5
+    runtime_bias_snap_min_confidence: 0.8
+    runtime_bias_yaw_enable: false
+    runtime_bias_debug: false
+
+ndt_relocalization:
+  ros__parameters:
+    prior_map_pcd: ""
+    map_voxel_size: 1.0
+    scan_voxel_size: 0.5
+    scan_window_size: 4
+    min_scan_points: 800
+    ndt_resolution: 2.0
+    ndt_step_size: 0.1
+    ndt_trans_eps: 0.01
+    ndt_max_iter: 60
+    fitness_score_thresh: 50.0
+    auto_match: true
+    publish_tf: false
+    publish_aligned_cloud: true
+    initial_pose_guess: [675321.22, 3560267.47, 11.25, 0.0, 0.0, 20.13]

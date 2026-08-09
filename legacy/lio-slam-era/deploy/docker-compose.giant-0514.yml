@@ -1,0 +1,102 @@
+# Docker Compose for running LIO-SLAM against the giant ("大块头") 0514 fp-demo
+# bag. Mirrors the topology of tools/run_fast_lio_pgo_prod.sh but split into
+# discrete services so each component can be restarted independently and its
+# logs inspected in isolation.
+#
+# Run from this directory:
+#   IMAGE=lio-slam-release:local \
+#     BAG_DIR=/home/data/giant/大块头/0514/fp-demo/rosbag/ros_0514_122932 \
+#     docker compose -f docker-compose.giant-0514.yml up
+#
+# Expected steady state (~5 s after bag-player starts):
+#   /Odometry                          ~10 Hz   (FAST-LIO2 raw)
+#   /fast_lio_pgo/odometry             ~1 Hz    (PGO corrected)
+#   /fast_lio_pgo/fused_odometry       ~160 Hz  (PGO + IMU preint fused)
+#   /odom                              ~160 Hz  (same, ENU frame)
+#   TF: map → odom → base_link
+
+x-common: &common
+  image: ${IMAGE:-wanderer123/fslam-humble:amd64}
+  network_mode: host
+  ipc: host
+  environment:
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    # Match prod runner thread caps so DDS/PCL don't oversubscribe cores.
+    OMP_NUM_THREADS: "4"
+    OPENBLAS_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+  restart: "no"   # bag replay is finite; let services exit naturally
+
+services:
+  # ── 1. FAST-LIO2 frontend (Hesai LiDAR + native Fixposition FPA IMU).
+  #     No standalone IMU relay: FAST-LIO2 reads /fixposition/fpa/rawimu
+  #     directly (imu_input_type=fixposition_fpa) and applies bias from
+  #     /fixposition/fpa/imubias internally. PGO does the same. Matches the
+  #     dev path that achieves 0.37 m mean on this bag.
+  #     /data is the path xsw_hesai.yaml's `map_file_path` writes the PCD to
+  #     on shutdown — must exist and be writable, else FAST-LIO2 throws during
+  #     destructor (`pcl::PCDWriter::writeBinary] Error during open!`).
+  fast-lio:
+    <<: *common
+    container_name: lio-slam-fast-lio
+    volumes:
+      - ./config:/config:ro
+      - lio-slam-data:/data
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/humble/setup.bash
+        source /root/ros2_ws/install/setup.bash
+        # FAST-LIO2's mapping.launch.py expects config_path/config_file split.
+        ros2 launch fast_lio mapping.launch.py \
+          config_path:=/config \
+          config_file:=fast_lio_xsw_hesai.yaml \
+          use_sim_time:=${USE_SIM_TIME:-true} \
+          rviz:=false
+
+  # ── 2. PGO backend (consumes FAST-LIO2 /Odometry + FP IMU + FP GPS ENU).
+  lio-slam-pgo:
+    <<: *common
+    container_name: lio-slam-pgo
+    depends_on:
+      - fast-lio
+    volumes:
+      - ./config:/config:ro
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/humble/setup.bash
+        source /root/ros2_ws/install/setup.bash
+        ros2 run lio_slam lio_slam_fastLioPGO --ros-args \
+          --params-file /config/params_fast_lio_pgo.yaml \
+          -p use_sim_time:=${USE_SIM_TIME:-true}
+
+  # ── 3. Bag player (replays 0514 fp-demo; omit / disable for live sensors).
+  #     MUST source /root/ros2_ws/install/setup.bash too — otherwise rosbag2
+  #     can't find fixposition_driver_msgs and silently drops every FP topic,
+  #     starving FAST-LIO2's IMU input and producing "No Effective Points".
+  bag-player:
+    <<: *common
+    container_name: lio-slam-bag-player
+    depends_on:
+      - lio-slam-pgo
+    volumes:
+      - ${BAG_DIR}:/bag:ro
+    command:
+      - bash
+      - -lc
+      - |
+        source /opt/ros/humble/setup.bash
+        source /root/ros2_ws/install/setup.bash
+        # Wait briefly for downstream nodes to subscribe before the LiDAR/IMU
+        # firehose starts (otherwise the first ~1 s of messages are dropped).
+        sleep 5
+        ros2 bag play /bag \
+          --read-ahead-queue-size 1000 \
+          --clock 100
+
+volumes:
+  lio-slam-data:    # writable scratch for FAST-LIO2's PCD save target

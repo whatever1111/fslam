@@ -1,15 +1,25 @@
-# M20 定位部署指南(fslam 版)| M20 Localization Deployment (fslam)
+# M20 定位部署指南 | M20 Localization Deployment
 
-本文讲**整套 M20 定位链路**:驱动 + fslam 产品层,对外交付 OEM 三话题契约
-`/ODOM` + `/LOC_BODY_POINTS` + `/LOCATION_STATUS`。只想跑裸驱动、自己给配置,看驱动仓库的
-`DEPLOYMENT.md`。
+fslam 是 M20 的**部署项目**:两种定位模式,同一个 OEM 三话题契约
+`/ODOM` + `/LOC_BODY_POINTS` + `/LOCATION_STATUS`。上游两个算法仓库都是通用组件,不带部署逻辑
+—— 部署逻辑全在这里。
+fslam is the M20 **deployment project**: two localization modes, one OEM three-topic contract.
+Both upstream algorithm repos are generic components carrying no deployment logic — all of that
+lives here.
 
-This covers **the whole M20 localization chain** — driver plus the fslam product layer — delivering
-the OEM three-topic contract `/ODOM` + `/LOC_BODY_POINTS` + `/LOCATION_STATUS`. For the bare driver
-with your own configuration, see `DEPLOYMENT.md` in the driver repo.
+| 模式 mode | 定位来源 what localizes | 用哪个上游 upstream used | 状态 status |
+|---|---|---|---|
+| **rtk**(fixposition-only)| VRTK2 RTK/INS 融合,fork 驱动直接交付三话题 the forked driver delivers the contract itself | fork:`whatever1111/fixposition_driver` 二进制 release | **线上 live**(原生 Foxy,`m20_loc_foxy.service`,2026-08-08 起)|
+| **fslam**(SLAM)| LIO-SLAM(FAST-LIO + PGO),容器内用镜像自带的**上游原版** fixposition 驱动 the container's internal **upstream** fixposition driver | `whatever1111/LIO-SLAM` 镜像(`SLAM_IMAGE` 钉版)| 工具链就绪 toolchain ready(`fslam_loc.service`)|
 
-**当前线上形态(2026-08-08 起):狗上原生 Foxy,无容器**,unit 是 `m20_loc_foxy.service`。
-**Live since 2026-08-08: native Foxy on the robot, no container**, via `m20_loc_foxy.service`.
+只想跑裸驱动、自己给配置:看 fork 驱动仓库的 `DEPLOYMENT.md`。
+For the bare driver with your own configuration, see `DEPLOYMENT.md` in the driver fork.
+
+> **为什么模式不是分支 | Why modes are not branches:** 两种模式共存于同一台狗上(SLAM 主用时 rtk
+> 是回退),切换靠 systemd 单元,不靠 checkout;分支轴留给 ROS 发行版(foxy/humble/jazzy),那才
+> 是和驱动 release 配对的维度。The two modes coexist on one robot (rtk stays as fallback when SLAM
+> is primary) and are switched by systemd unit, not by checkout; the branch axis is the ROS distro,
+> which is what pairs with driver releases.
 
 ---
 
@@ -36,17 +46,17 @@ with your own configuration, see `DEPLOYMENT.md` in the driver repo.
 
 ## 1. 方式 A:发布包(推荐,免编译)| Release bundle (recommended, no compile)
 
-从 fslam 的 `foxy-v*` release 取 `fslam-m20_<ver>_foxy_arm64.tar.gz`。包里 `driver/` 是驱动二进制树,
+从 fslam 的 `foxy-v*` release 取 `fslam-rtk_<ver>_foxy_arm64.tar.gz`。包里 `driver/` 是驱动二进制树,
 `fslam/` 是启动脚本 + 配置 + unit。`driver/` 的布局就是 `run_m20_foxy.sh` 认的 `WS`,可以直接当工作区。
 
-Take `fslam-m20_<ver>_foxy_arm64.tar.gz` from an fslam `foxy-v*` release. Inside, `driver/` is the
+Take `fslam-rtk_<ver>_foxy_arm64.tar.gz` from an fslam `foxy-v*` release. Inside, `driver/` is the
 driver binary tree and `fslam/` is the launcher, config and unit. `driver/` matches the `WS` layout
 `run_m20_foxy.sh` expects, so it works as a drop-in workspace.
 
 ```bash
 sha256sum -c SHA256SUMS.txt
-tar -xzf fslam-m20_<ver>_foxy_arm64.tar.gz
-cd fslam-m20-foxy
+tar -xzf fslam-rtk_<ver>_foxy_arm64.tar.gz
+cd fslam-rtk-foxy
 
 # 手动跑一次看看 | run it by hand first
 WS="$(pwd)/driver" ./fslam/run_m20_foxy.sh
@@ -212,6 +222,59 @@ Logs: `logs/<mode>/fixposition.log` for the driver, plus `robot_state_publisher.
 
 ---
 
+## 3.4 fslam(SLAM)模式部署 | Deploying fslam (SLAM) mode
+
+组成 | what runs:**容器**(`SLAM_IMAGE` 钉版的 LIO-SLAM Humble 镜像:FAST-LIO + PGO + 融合 +
+镜像自带的上游 fixposition 驱动)+ **宿主机胶水**(`motion_info_to_twist.py` 轮速上行、
+`fp_to_odom.py --ros-args -p relay_enable:=false` 出去畸变点云和状态)。融合节点经参数 overlay 直接发
+`/ODOM`,无别名中继。
+A **container** (the LIO-SLAM Humble image pinned by `SLAM_IMAGE`: FAST-LIO + PGO + fusion + its
+internal upstream fixposition driver) plus **host glue** (`motion_info_to_twist.py` for wheelspeed,
+`fp_to_odom.py -p relay_enable:=false` for the deskewed cloud and status). The fusion node publishes
+`/ODOM` directly via a param overlay — no alias relay.
+
+**镜像获取 | getting the image:** `SLAM_IMAGE` 文件钉住镜像(私有 registry,release **不附带**)。
+狗没有公网,从有 registry 权限的机器搬:
+The `SLAM_IMAGE` file pins the image (private registry, **not attached** to releases). The robot has
+no internet; ship it from any machine with registry access:
+
+```bash
+docker pull "$(cat SLAM_IMAGE)"
+docker save "$(cat SLAM_IMAGE)" | gzip > slam_image.tar.gz
+scp slam_image.tar.gz robot:/home/user/ && ssh robot 'docker load < /home/user/slam_image.tar.gz'
+```
+
+**启动 | start:**
+
+```bash
+./run_fast_lio_pgo_prod.sh                 # 默认后台 + docker restart 保活
+./run_fast_lio_pgo_prod.sh --check         # 逐话题链路体检 | per-topic pipeline check
+./run_fast_lio_pgo_prod.sh --foreground    # 调试:前台 + Ctrl-C 停
+```
+
+常用选项:`--image <img>`、`--profile <name>`(默认 m20)、`--fp-stream <uri>`、
+`--odom-topic <t>`、`--foxglove`;完整列表见脚本头。
+Common options: `--image`, `--profile` (default m20), `--fp-stream`, `--odom-topic`, `--foxglove`;
+the full list is in the script header.
+
+**开机自启 | boot service:**
+
+```bash
+sudo systemctl disable --now rtk_loc m20_loc m20_loc_foxy    # 都发 /ODOM | all publish /ODOM
+sudo cp systemd/fslam_loc.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now fslam_loc
+```
+
+> 容器是 Humble,受 loopback 墙限制**收不到 OEM 雷达云**(§0);雷达数据由宿主机侧供给(去畸变点云在
+> 宿主机 `fp_to_odom.py` 产出,SLAM 输入走仓库内已有的中继链路)。rtk 模式(原生 Foxy)不受此影响,
+> 这正是两种模式并存的原因之一。
+> The container is Humble and — per the loopback wall (§0) — **cannot receive the OEM cloud
+> directly**; lidar data is supplied host-side (the deskewed cloud comes from host `fp_to_odom.py`,
+> and SLAM input goes through the repo's existing relay path). rtk mode (native Foxy) is unaffected,
+> which is one reason both modes exist.
+
+---
+
 ## 3.5 配置:话题名全部可配 | Configuration: every topic name is configurable
 
 线上用的是 `config/fixposition/config_m20.yaml`(镜像已烘进去,原生方式由 `run_m20_foxy.sh` 传入)。
@@ -304,16 +367,21 @@ cloud (§0), so `input_val.lidar` will read 0.
 
 ## 7. 版本配对 | Version pairing
 
-fslam 的发行版分支和驱动分支/发布线一一对应,`DRIVER_RELEASE` 文件钉住具体的驱动 release,发布流水线会
-按它下载并校验 SHA256。分支表见 `DISTRO.md`。
+两个模式各有一个钉版文件,fslam 的一个 release 同时交付两条工具链:
+Each mode has its own pin file, and one fslam release ships both toolchains:
 
-Each fslam distro branch pairs with a driver branch and release line; the `DRIVER_RELEASE` file pins
-the exact driver release, which the pipeline downloads and SHA256-verifies. Branch table in
-`DISTRO.md`.
+| 钉版文件 pin file | 钉什么 pins | 用于 used by |
+|---|---|---|
+| `DRIVER_RELEASE` | fork 驱动的 release tag(如 `foxy-v1.0.1`)| rtk 模式:流水线下载并核 SHA256 |
+| `SLAM_IMAGE` | LIO-SLAM 镜像(如 `wanderer123/fslam-humble:arm64`)| fslam 模式:捆绑包记录引用,镜像不随发布分发(私有 registry)|
+
+fslam 发行版分支和驱动分支/发布线一一对应,分支表见 `DISTRO.md`。
+Each fslam distro branch pairs with a driver branch and release line; branch table in `DISTRO.md`.
 
 ```bash
-# 升级驱动:改 pin,打标签,推 | bump the driver: edit the pin, tag, push
-echo foxy-v1.0.1 > DRIVER_RELEASE
-git commit -am "chore(foxy): pin driver foxy-v1.0.1"
-git tag foxy-v1.0.2 && git push origin foxy foxy-v1.0.2
+# 升级 rtk 驱动:改 pin,打标签,推 | bump the rtk driver: edit the pin, tag, push
+echo foxy-v1.0.2 > DRIVER_RELEASE
+git commit -am "chore(foxy): pin driver foxy-v1.0.2"
+git tag foxy-v1.1.1 && git push origin foxy foxy-v1.1.1
+# 升级 SLAM 镜像同理改 SLAM_IMAGE | bump the SLAM image by editing SLAM_IMAGE likewise
 ```

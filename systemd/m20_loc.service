@@ -19,7 +19,7 @@ Description=M20 Localization Service (fslam, driver-native)
 Wants=network-online.target docker.service
 After=network-online.target docker.service
 # 同时跑会有两个 /ODOM 发布者 | two /ODOM publishers otherwise
-Conflicts=rtk_loc.service
+Conflicts=rtk_loc.service fslam_loc.service
 
 [Service]
 # 启动脚本把容器(--restart unless-stopped)拉起后即退出 → oneshot +
