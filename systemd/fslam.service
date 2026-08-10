@@ -23,7 +23,7 @@ Description=fslam Localization Service (LIO-SLAM container + host glue)
 Wants=network-online.target docker.service
 After=network-online.target docker.service
 # 都发 /ODOM | they all publish /ODOM
-Conflicts=rtk_only.service rtk_loc.service m20_loc.service m20_loc_foxy.service
+Conflicts=rtk_only.service fslam_native.service rtk_loc.service m20_loc.service m20_loc_foxy.service
 
 [Service]
 # 启动脚本把容器(--restart unless-stopped)和宿主机节点(pid 文件)拉起后

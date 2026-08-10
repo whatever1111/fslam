@@ -12,13 +12,13 @@ components — deployment logic lives here. The generic machinery and branch mod
 | | native | docker |
 |---|---|---|
 | **`rtk_only`**(RTK/INS:fork 驱动直接交付契约 the forked driver delivers the contract)| ✅ `run_rtk_only_native.sh` + `rtk_only.service` — **线上 live** | ✅ release 镜像一行 `docker run`(§DEPLOYMENT.md)— 已在 106 验证 validated |
-| **`fslam`**(SLAM:LIO-SLAM 容器,内用上游原版 fixposition 驱动 upstream driver inside)| —(SLAM 按设计容器化 containerized by design)| ✅ `run_fslam.sh` + `fslam.service` — 工具链就绪 toolchain ready |
+| **`fslam`**(SLAM:LIO-SLAM + 内部上游原版 fixposition 驱动 upstream driver inside)| ✅ `run_fslam_native.sh` + `fslam_native.service` — 原生 Foxy 直收 OEM 点云,无中继 direct OEM cloud, no relay | ✅ `run_fslam.sh` + `fslam.service` — Humble 容器 + 中继 container + relay |
 
 - 一次只能跑一个:所有模式都发 `/ODOM`,unit 间 `Conflicts=` 互斥;手工进程绕得过互斥,自己当心。
   One at a time: every mode publishes `/ODOM`; units conflict pairwise, hand-started processes bypass that.
 - **必须 Foxy**:Humble 的 Fast DDS 2.6 永远收不到 OEM 的 loopback-only 雷达云(见 `DISTRO.md`)。
   **Foxy required**: Humble's Fast DDS 2.6 can never receive the OEM's loopback-only cloud (`DISTRO.md`).
-- 钉版 | pins:`DRIVER_RELEASE`(rtk_only ← fork 驱动 release)· `SLAM_IMAGE`(fslam ← LIO-SLAM 镜像,私有 registry)。
+- 钉版 | pins:`DRIVER_RELEASE`(rtk_only ← fork 驱动 release)· `SLAM_IMAGE`(fslam · docker ← LIO-SLAM 镜像,私有 registry)· `SLAM_NATIVE_RELEASE`(fslam · native ← LIO-SLAM 仓库 `foxy-v*` release 的原生 tarball)。
 
 ## 快速开始 | Quick start
 
@@ -36,6 +36,10 @@ docker run -d --name rtk_only --restart unless-stopped \
 
 # fslam · docker(镜像按 SLAM_IMAGE 先离线搬上狗 | ship the pinned image first)
 ./run_fslam.sh && ./run_fslam.sh --check
+
+# fslam · native(LIO-SLAM tarball 按 SLAM_NATIVE_RELEASE 解到 /home/user/lio-slam)
+# (extract the pinned LIO-SLAM native tarball to /home/user/lio-slam first)
+./run_fslam_native.sh && ./run_fslam_native.sh --check
 ```
 
 ## 数据流 | Data flow
@@ -51,9 +55,10 @@ docker run -d --name rtk_only --restart unless-stopped \
 ```
 DEPLOYMENT.md                部署指南 | the deployment guide
 DISTRO.md                    发行版叶子说明(在叶子分支上)| distro notes (on leaf branches)
-DRIVER_RELEASE  SLAM_IMAGE   两个模式的钉版 | per-mode pins(DRIVER_RELEASE 在叶子上 on the leaf)
+DRIVER_RELEASE SLAM_IMAGE SLAM_NATIVE_RELEASE   各模式·形态的钉版 | per mode·form pins(叶子上 on the leaf)
 run_rtk_only_native.sh       rtk_only · native 启动器(线上 live)
 run_fslam.sh                 fslam · docker 启动器
+run_fslam_native.sh          fslam · native 启动器(LIO-SLAM 原生 tarball + fork 驱动上游节点)
 tools/build_rtk_only_native.sh  狗上编译 rtk_only 驱动 | build the driver on the robot
 tools/build_m20_image.sh     旧 Humble 容器镜像构建(humble 叶子备用)| legacy Humble image build
 lib/deploy_common.sh         共享函数 | shared helpers
@@ -66,6 +71,7 @@ config/
 systemd/
   rtk_only.service           rtk_only · native(线上 live)
   fslam.service              fslam · docker
+  fslam_native.service       fslam · native
 release/                     rtk_only docker 镜像的 Dockerfile 等 | release payloads
 legacy/                      旧代启动器/单元 + lio-slam-era 迁移存档,勿用 | superseded, do not use
 logs/                        运行时日志(git 忽略)| runtime logs (git-ignored)

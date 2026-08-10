@@ -282,6 +282,53 @@ sudo systemctl daemon-reload && sudo systemctl enable --now fslam
 
 ---
 
+## 3.4b fslam · native — 原生 Foxy(无容器、无中继)| fslam native on Foxy (no container, no relay)
+
+组成 | what runs:**LIO-SLAM 原生二进制**(`SLAM_NATIVE_RELEASE` 钉版的 `foxy-v*` release tarball:
+FAST-LIO + PGO + 融合 + canonical 适配器,全部原生 Foxy 进程)+ **驱动 fork 的上游节点**(与 rtk_only
+共用 `/home/user/m20_ws` 安装,但跑的是无 m20 包装的 `fixposition_driver_ros2_exec`,fslam 配置,只出
+FPA 流不出 `/ODOM`)+ **同一套宿主机胶水**。原生 Foxy(Fast DDS 2.0)直接收 OEM 的 loopback-only
+点云 —— 这是 fslam 摆脱 Humble 容器 + 中继链路的形态。
+The **LIO-SLAM native binaries** (the `foxy-v*` release tarball pinned by `SLAM_NATIVE_RELEASE`) +
+the **driver fork's upstream node** (same `/home/user/m20_ws` install as rtk_only, but running plain
+`fixposition_driver_ros2_exec` with the fslam config — FPA streams only, no `/ODOM`) + the **same host
+glue**. Native Foxy (Fast DDS 2.0) receives the OEM's loopback-only cloud directly — no relay.
+
+**包获取 | getting the bundle:** LIO-SLAM 仓库(私有)的 `foxy-v*` release 附带
+`lio-slam_<ver>_foxy_arm64.tar.gz`;狗没有公网,从有权限的机器搬:
+The private LIO-SLAM repo's `foxy-v*` releases carry the tarball; ship it from a machine with access:
+
+```bash
+tar -xzf lio-slam_<ver>_foxy_arm64.tar.gz     # 得到 lio-slam/ | yields lio-slam/
+scp -r lio-slam robot:/home/user/             # 路径可换,--slam-dir 指过去即可
+ssh robot 'source /home/user/lio-slam/env.sh && echo OK'   # 自检 | sanity
+```
+
+**启动 | start:**
+
+```bash
+./run_fslam_native.sh                # 驱动 + 管线 + 胶水,全后台(pid 文件)
+./run_fslam_native.sh --check        # 逐话题链路体检 | per-topic pipeline check
+./run_fslam_native.sh --stop         # 整组停止 | stop everything
+```
+
+常用选项:`--slam-dir`(默认 `/home/user/lio-slam`)、`--driver-ws`(默认 `/home/user/m20_ws`)、
+`--profile`(默认 m20)、`--lidar-topic`(默认 `/LIDAR/POINTS2` —— 当前固件话题,直吃无中继)、
+`--fp-stream <uri>`、`--odom-topic`;完整列表见脚本头。
+Common options: `--slam-dir`, `--driver-ws`, `--profile` (default m20), `--lidar-topic`
+(default `/LIDAR/POINTS2` — the current firmware topic, consumed directly), `--fp-stream`,
+`--odom-topic`; full list in the script header.
+
+**开机自启 | boot service:**
+
+```bash
+sudo systemctl disable --now fslam rtk_only rtk_loc m20_loc m20_loc_foxy   # 都发 /ODOM
+sudo cp systemd/fslam_native.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now fslam_native
+```
+
+---
+
 ## 3.5 配置:话题名全部可配 | Configuration: every topic name is configurable
 
 线上用的是 `config/fixposition/config_m20.yaml`(镜像已烘进去,原生方式由 `run_rtk_only_native.sh` 传入)。
@@ -392,13 +439,14 @@ cannot coexist.
 
 ## 7. 版本配对 | Version pairing
 
-两个模式各有一个钉版文件,fslam 的一个 release 同时交付两条工具链:
-Each mode has its own pin file, and one fslam release ships both toolchains:
+每个模式·形态各有一个钉版文件:
+One pin file per mode·form:
 
 | 钉版文件 pin file | 钉什么 pins | 用于 used by |
 |---|---|---|
 | `DRIVER_RELEASE` | fork 驱动的 release tag(如 `foxy-v1.0.1`)| rtk_only 模式:流水线下载并核 SHA256 |
-| `SLAM_IMAGE` | LIO-SLAM 镜像(如 `wanderer123/fslam-humble:arm64`)| fslam 模式:捆绑包记录引用,镜像不随发布分发(私有 registry)|
+| `SLAM_IMAGE` | LIO-SLAM 镜像(如 `wanderer123/fslam-humble:arm64`)| fslam · docker:捆绑包记录引用,镜像不随发布分发(私有 registry)|
+| `SLAM_NATIVE_RELEASE` | LIO-SLAM 仓库的 `foxy-v*` release tag | fslam · native:原生 tarball 版本(私有仓库,人工搬运,见 §3.4b)|
 
 fslam 发行版分支和驱动分支/发布线一一对应,分支表见 `DISTRO.md`。
 Each fslam distro branch pairs with a driver branch and release line; branch table in `DISTRO.md`.

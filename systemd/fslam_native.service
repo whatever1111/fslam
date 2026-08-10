@@ -1,0 +1,54 @@
+# ============================================================================
+# fslam_native.service —— 开机自启 fslam(SLAM)定位链路(Foxy 原生,无容器)
+#                boot-start the fslam (SLAM) localization chain, native Foxy
+# ----------------------------------------------------------------------------
+# 模式 | mode:LIO-SLAM(FAST-LIO + PGO)原生二进制 + 驱动 fork 的上游节点 +
+# 宿主机胶水。原生 Foxy 进程直接收 OEM 的 loopback-only 点云 —— 无中继、无容器。
+# The LIO-SLAM native binaries + the driver fork's upstream node + host glue.
+# Native Foxy processes receive the OEM's loopback-only cloud directly — no
+# relay, no container.
+#
+# 假设 | assumes:仓库 /home/user/fslam,LIO-SLAM 包 /home/user/lio-slam
+# (版本钉在 SLAM_NATIVE_RELEASE),驱动 fork 安装 /home/user/m20_ws(与
+# rtk_only 共用)。五种定位服务都发 /ODOM,任何时候只能 enable 一个。
+#
+# 安装 | install:
+#   sudo systemctl disable --now rtk_loc m20_loc m20_loc_foxy rtk_only fslam
+#   sudo cp systemd/fslam_native.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now fslam_native
+# 验证 | verify: /home/user/fslam/run_fslam_native.sh --check
+# ============================================================================
+[Unit]
+Description=fslam Localization Service (LIO-SLAM native Foxy + host glue)
+Wants=network-online.target
+After=network-online.target
+# 都发 /ODOM | they all publish /ODOM
+Conflicts=fslam.service rtk_only.service rtk_loc.service m20_loc.service m20_loc_foxy.service
+
+[Service]
+# 启动脚本把驱动/管线/胶水节点(pid 文件)拉起后即退出 → oneshot +
+# RemainAfterExit(active=已部署);停止走 --stop(整组回收 setsid 管线)。
+# The launcher exits once driver/pipeline/glue are up (pid files) → oneshot +
+# RemainAfterExit means active = deployed; stop goes through --stop, which
+# reaps the setsid pipeline as a process group.
+Type=oneshot
+RemainAfterExit=yes
+User=root
+
+# 等物理网卡拿到 IP(FP 设备走 TCP)| wait for a physical NIC to get an IP
+ExecStartPre=/bin/bash -c "echo '[INFO] waiting for physical network IP...'; while ! ip -4 addr show | grep -E '^[0-9]+: (eth|en)' -A 2 | grep -q 'inet '; do sleep 1; done; echo '[INFO] IP found'"
+# DDS 组播路由钉到通信网卡 | pin the DDS multicast route to the comms NIC
+ExecStartPre=/sbin/ip route replace 224.0.0.0/4 dev eth0
+# 给 OEM rsdriver 一点时间建 writer(整机上电竞态,同 rtk_only.service 注释)
+# give the OEM rsdriver time to create its writers at whole-robot power-on
+ExecStartPre=/bin/sleep 10
+
+ExecStart=/bin/bash /home/user/fslam/run_fslam_native.sh
+ExecStop=/bin/bash /home/user/fslam/run_fslam_native.sh --stop
+TimeoutStartSec=300
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
