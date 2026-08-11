@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  UDP-only Fast DDS profile for the OEM handler.service (NOT for our driver).
+
+  The OEM host mixes Fast DDS generations: the ROS 2 Foxy graph (our driver,
+  rsdriver, yesense, accumulate_cloud) runs 2.1.x, while native DrDDS consumers
+  such as handler link 2.14. Cross-version SHARED-MEMORY delivery silently
+  drops large samples (the ~0.85 MB /cloud_nav class; small samples like
+  /LIO_ODOM pass), which starves the handler safety gate and surfaces as
+  "0x312 导航模块通讯异常" on task dispatch. Forcing handler onto UDP fixes
+  reception; verified on the M20 Pro 2026-08-11.
+
+  Install (documented in DEPLOYMENT.md):
+    /etc/systemd/system/handler.service.d/dds.conf ->
+      Environment=FASTRTPS_DEFAULT_PROFILES_FILE=<this file>
+
+  Why not fix it on our side instead: the driver MUST keep default transports -
+  the OEM lidar writer only delivers over same-version SHM (a UDP-only driver
+  participant receives zero /LIDAR/POINTS; A/B-measured 2026-08-11).
+
+  The whitelist matches the OEM's own fastdds.xml (lo + the .33 DDS interface);
+  what we drop relative to that file is SHM and its 500 MB segments.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_transport</transport_id>
+      <type>UDPv4</type>
+      <interfaceWhiteList>
+        <address>127.0.0.1</address>
+        <address>10.21.33.106</address>
+      </interfaceWhiteList>
+      <sendBufferSize>8388608</sendBufferSize>
+      <receiveBufferSize>8388608</receiveBufferSize>
+      <maxMessageSize>65500</maxMessageSize>
+      <non_blocking_send>false</non_blocking_send>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="udp_only" is_default_profile="true">
+    <rtps>
+      <builtin>
+        <discovery_config>
+          <discoveryProtocol>SIMPLE</discoveryProtocol>
+          <EDP>SIMPLE</EDP>
+          <simpleEDP>
+            <PUBWRITER_SUBREADER>true</PUBWRITER_SUBREADER>
+            <PUBREADER_SUBWRITER>true</PUBREADER_SUBWRITER>
+          </simpleEDP>
+        </discovery_config>
+      </builtin>
+      <userTransports>
+        <transport_id>udp_transport</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

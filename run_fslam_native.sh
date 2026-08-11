@@ -243,8 +243,6 @@ if [[ "${START_FIXPOSITION}" == "1" ]]; then
     echo "[INFO] FP stream 覆盖 | overridden: ${FP_STREAM}"
   fi
   # 直接起可执行文件,不走 launch XML(Foxy 方言问题,同 run_rtk_only_native.sh)
-  # UDP-only profile(同 rtk_only):跨版本 SHM 对 ~1MB 级大样本静默丢包 — 0x312 结论。
-  # Same UDP-only profile as rtk_only: cross-version SHM silently drops ~1 MB samples.
   setsid bash -c "set +u \
     && source '${HOST_ROS_SETUP}' \
     && source '${DRIVER_WS}/install/setup.bash' \
