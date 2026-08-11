@@ -243,11 +243,14 @@ if [[ "${START_FIXPOSITION}" == "1" ]]; then
     echo "[INFO] FP stream 覆盖 | overridden: ${FP_STREAM}"
   fi
   # 直接起可执行文件,不走 launch XML(Foxy 方言问题,同 run_rtk_only_native.sh)
+  # UDP-only profile(同 rtk_only):跨版本 SHM 对 ~1MB 级大样本静默丢包 — 0x312 结论。
+  # Same UDP-only profile as rtk_only: cross-version SHM silently drops ~1 MB samples.
   setsid bash -c "set +u \
     && source '${HOST_ROS_SETUP}' \
     && source '${DRIVER_WS}/install/setup.bash' \
     && export LD_LIBRARY_PATH='${DRIVER_WS}/fpsdk/lib:'\"\${LD_LIBRARY_PATH:-}\" \
     && export ROS_DOMAIN_ID='${ROS_DOMAIN_ID}' RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+    && export FASTRTPS_DEFAULT_PROFILES_FILE='${BASE_DIR}/config/fixposition/fastdds_driver_udp.xml' \
     && exec ros2 run fixposition_driver_ros2 fixposition_driver_ros2_exec \
          --ros-args -r __node:=fixposition_driver_ros2 \
          --params-file '${LOG_DIR}/fixposition_runtime.yaml'" \

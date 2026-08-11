@@ -70,6 +70,15 @@
             retime_to_host_clock: true      # PTP 正常时是 no-op,失锁时兜底
             retime_jump_sec: 0.5
 
+            # 原生 handler 安全门控订阅的旧接口(0x312 排查发现);同一里程计/去畸变
+            # 点云按旧名可靠 QoS 再发一份,置空串可单独关闭。
+            # Legacy interface the native handler safety gate subscribes (0x312
+            # postmortem): the same odometry / deskewed cloud re-published under
+            # the legacy names with reliable QoS. Empty string disables one.
+            handler_odom_topic: "/LIO_ODOM"
+            handler_cloud_topic: "/cloud_nav"
+            handler_depth: 10
+
             # OEM 的点云 writer 绑在 127.0.0.1-only 的 participant 上。Foxy(FastDDS 2.0)
             # 会连同环回 locator 一起通告,所以宿主机原生跑就能直接收到;Humble(2.6)不会,
             # 容器里这一路永远收不到 —— 这就是 M20 走 Foxy 原生部署的原因。见驱动仓库 DISTRO.md。

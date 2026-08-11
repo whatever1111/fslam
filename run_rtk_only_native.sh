@@ -77,6 +77,14 @@ set -u
 export LD_LIBRARY_PATH="${SDK_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 export ROS_DOMAIN_ID
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
+# 本进程强制 UDP(自带 profile,不碰 OEM 配置):同机 2.14 原生消费者(handler)与
+# 我们 2.1.x 的跨版本 SHM 会静默丢大样本(~1MB 点云级),小消息不受影响。
+# 0x312 排查结论(2026-08-10/11);切勿改回 /opt/robot/fastdds.xml(500MB 段泄漏)。
+# Force UDP for THIS process only (our own profile; OEM config untouched):
+# cross-version SHM (our 2.1.x vs the native consumers' 2.14) silently drops
+# large samples (~1 MB cloud class); small ones pass. 0x312 postmortem
+# (2026-08-10/11). Never point this at /opt/robot/fastdds.xml (500 MB segment leak).
+export FASTRTPS_DEFAULT_PROFILES_FILE="${FIXPOSITION_CONFIG_DIR}/fastdds_driver_udp.xml"
 
 # 直接起可执行文件,不走 node.launch:各版本的 launch XML 方言不一样(Foxy 的
 # launch_xml 不认 ros_args / respawn 这些 Galactic 以后才加的属性,会直接
