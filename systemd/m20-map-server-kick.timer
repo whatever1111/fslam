@@ -1,9 +1,0 @@
-[Unit]
-Description=Post-boot DDS re-pair kick, once at T+3min
-
-[Timer]
-OnBootSec=180
-AccuracySec=15s
-
-[Install]
-WantedBy=timers.target

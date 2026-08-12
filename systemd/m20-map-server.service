@@ -38,10 +38,15 @@ User=root
 # 等 eth0 拿到 IP;再留 10s 规避 PTP 时间跳变与底层网络抖动(与 m20_loc_foxy 同款)。
 # Wait for eth0's IP, then 10 s for PTP step / link settling (same as m20_loc_foxy).
 ExecStartPre=/bin/sh -c "while ! ip -4 addr show eth0 | grep -q inet; do sleep 1; done"
-ExecStartPre=/bin/sleep 10
 # 组播路由钉在 eth0(OEM DDS 网段)。 Pin the DDS multicast route to eth0.
 ExecStartPre=+/sbin/ip route replace 224.0.0.0/4 dev eth0
-ExecStartPre=/bin/sleep 2
+# 开机就绪门:时钟阶跃过去 + OEM 节点群(含消费者 astar)起完再 latch —— 对着
+# 平静系统上已就位的 reader 发布,实测 100% 送达;开机风暴期的配对会永久楔死
+# (根因见脚本头注)。 Boot readiness gate: latch only after the clock step and
+# the OEM crowd (incl. the astar consumer) — publishing to already-present
+# readers on a settled system delivers 100%; storm-window pairings wedge
+# permanently (root cause in the script header).
+ExecStartPre=/home/user/fslam/tools/wait_boot_settled.sh 150
 
 # 默认传输(SHM+UDP)。曾试过 UDP-only 防 SHM 端口毒化,但 2026-08-12 的重启验证
 # 表明:astar 对 boot 首发 latch 的接收失败与传输无关(UDP 下同样失败,疑似 OEM

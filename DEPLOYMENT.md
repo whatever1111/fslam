@@ -381,22 +381,24 @@ install once, enable at boot, leave it alone.
 
 ```bash
 cp systemd/m20-map-server.service /etc/systemd/system/
-cp systemd/m20-map-server-kick.{service,timer} /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now m20-map-server m20-map-server-kick.timer
+systemctl daemon-reload && systemctl enable --now m20-map-server
 systemctl is-active m20-map-server                 # active
-systemctl list-timers m20-map-server-kick.timer    # 每次开机 T+3min 触发一次
 ```
 
-> **为什么有 kick timer:** 开机风暴期的 DDS 配对疾病(与 rsdriver 的 wedged-writer 同族)会让
-> 开机时 latch 的 `/GRID_MAP` 到不了 OEM 消费者(实测:事后探针能收到,导航侧却没收到,人工
-> 重发即通)。timer 在开机 3 分钟后把 map_server 重启一次,新 writer 对已就位的消费者重新
-> latch —— 与人工修法等价,自动化。重启间隙(约 12 s)消费者保留手里的旧地图,无影响。
-> **Why the kick timer:** the boot-storm DDS pairing disease (same family as rsdriver's
-> wedged writer) can keep the boot-time `/GRID_MAP` latch from ever reaching the OEM consumer
-> (measured: a later probe receives it, the nav side did not, and a manual re-send fixed it).
-> The timer restarts map_server once at T+3 min so a fresh writer re-latches to the now-present
-> consumers — the manual fix, automated. During the ~12 s restart gap consumers keep their
-> retained copy; no impact.
+> **为什么有就绪门(`tools/wait_boot_settled.sh`):** 2026-08-12 全量取证的根因 —— 开机
+> ~47s 时 chrony 选中 PHC0 **阶跃系统时钟**,OEM DDS 节点群在其后才陆续起来;在这之前创建的
+> DDS participant(locator 集创建时冻结,Foxy Fast RTPS 2.1.4 定时事件未迁移 steady_clock)
+> 与后到的对端配对会**永久楔死**,每次开机受害者不同(实测三对)。平静系统上的配对实测 100%
+> 可靠,所以我们所有 DDS 单元(rtk_only / fslam / m20-map-server)统一等这道门再启动 ——
+> **一次起对,开机即稳,无事后重启**。
+> **Why the readiness gate (`tools/wait_boot_settled.sh`):** root-caused 2026-08-12 with full
+> journald forensics — chrony selects PHC0 and **steps the system clock** ~47 s after boot,
+> with the OEM DDS crowd starting only after that; DDS participants created earlier (locator
+> sets freeze at creation; Foxy's Fast RTPS 2.1.4 predates the steady_clock migration) wedge
+> **permanently** against later-arriving peers, with a different victim pair each boot (three
+> observed). Calm-system pairing measured 100% reliable, so every DDS unit of ours
+> (rtk_only / fslam / m20-map-server) waits for this gate — **paired right the first time,
+> stable immediately, no post-hoc restarts**.
 
 > 注意三个易混名字:`/GRID_MAP` = map_server 的 latched 地图(OccupancyGrid);
 > `/grid_map` = passable_area 的 `grid_map_msgs/GridMap`(无关);`occ_grid` = 地图名。

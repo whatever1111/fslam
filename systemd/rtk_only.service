@@ -45,6 +45,13 @@ ExecStartPre=/sbin/ip route replace 224.0.0.0/4 dev eth0
 # systemctl restart rsdriver. See MEMORY: m20-lidar-points-publisher-failure.
 ExecStartPre=/bin/sleep 10
 
+# 开机就绪门:等时钟阶跃过去 + OEM DDS 节点群起完(根因与实测见脚本头注)。
+# 在"定"了的系统上创建 participant,配对实测 100% 可靠 —— 一次起对,无需事后重启。
+# Boot readiness gate: wait out the clock step and the OEM DDS crowd (root
+# cause + measurements in the script header). Participants created on a
+# settled system pair 100% reliably — start correctly once, no healing needed.
+ExecStartPre=/home/user/fslam/tools/wait_boot_settled.sh 150
+
 # 等 VRTK2 的 TCP 口可达再起驱动(上限 120s,超时告警但放行)。开机时传感网交换机
 # 比本机慢:驱动会先建好 DDS participant 再连 TCP,连不上就退出 → systemd 拉起 →
 # 开机风暴里多一具 DDS 尸体。尸体会毒化 Fast DDS 共享内存端口,曾把别的
