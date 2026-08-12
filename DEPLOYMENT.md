@@ -385,20 +385,34 @@ systemctl daemon-reload && systemctl enable --now m20-map-server
 systemctl is-active m20-map-server                 # active
 ```
 
-> **为什么有就绪门(`tools/wait_boot_settled.sh`):** 2026-08-12 全量取证的根因 —— 开机
-> ~47s 时 chrony 选中 PHC0 **阶跃系统时钟**,OEM DDS 节点群在其后才陆续起来;在这之前创建的
-> DDS participant(locator 集创建时冻结,Foxy Fast RTPS 2.1.4 定时事件未迁移 steady_clock)
-> 与后到的对端配对会**永久楔死**,每次开机受害者不同(实测三对)。平静系统上的配对实测 100%
-> 可靠,所以我们所有 DDS 单元(rtk_only / fslam / m20-map-server)统一等这道门再启动 ——
-> **一次起对,开机即稳,无事后重启**。
-> **Why the readiness gate (`tools/wait_boot_settled.sh`):** root-caused 2026-08-12 with full
-> journald forensics — chrony selects PHC0 and **steps the system clock** ~47 s after boot,
-> with the OEM DDS crowd starting only after that; DDS participants created earlier (locator
-> sets freeze at creation; Foxy's Fast RTPS 2.1.4 predates the steady_clock migration) wedge
-> **permanently** against later-arriving peers, with a different victim pair each boot (three
-> observed). Calm-system pairing measured 100% reliable, so every DDS unit of ours
-> (rtk_only / fslam / m20-map-server) waits for this gate — **paired right the first time,
-> stable immediately, no post-hoc restarts**.
+> **为什么等 time-sync.target(chrony-wait):** 2026-08-12 五次开机全量取证的根因 ——
+> chrony 首启死于尚未出现的 /dev/ptp1(`systemd/chrony-order-dropin.conf` 修此竞速),
+> 第二次启动选中 PHC0 后**阶跃系统时钟**;阶跃前创建的 DDS participant(Foxy Fast RTPS
+> 2.1.4 定时事件未迁移 steady_clock)与对端的配对**永久楔死**,每次开机受害者不同(实测
+> 三对)。阶跃后创建的配对 100% 可靠,与 OEM 启动顺序无关。装上 `systemd/chrony-wait.service`
+> 后 `time-sync.target` 真正等到同步才放行,我们的 DDS 单元(rtk_only / fslam /
+> m20-map-server)只需声明 `Wants= + After=time-sync.target` —— 纯依赖,无脚本无 sleep,
+> **一次起对,开机即稳**。另:不要让单元等 OEM 服务 —— OEM 启动管理器反过来在等我们
+> (三次实测),互相等就是死锁。
+> **Why wait on time-sync.target (chrony-wait):** root-caused 2026-08-12 over five fully
+> journaled boots — chrony's first start dies on a not-yet-present /dev/ptp1 (fixed by
+> `systemd/chrony-order-dropin.conf`), and its second start **steps the system clock** on
+> selecting PHC0; DDS participants created before the step (Foxy's Fast RTPS 2.1.4 predates
+> the steady_clock migration) wedge **permanently**, a different victim pair each boot (three
+> observed). After-step pairings are 100% reliable regardless of OEM start order. With
+> `systemd/chrony-wait.service` installed, `time-sync.target` genuinely blocks until sync, so
+> our DDS units just declare `Wants= + After=time-sync.target` — pure dependencies, no
+> scripts, no sleeps, **paired right the first time**. Also: never make units wait for OEM
+> services — the OEM startup manager waits for US (measured three times); mutual waiting
+> deadlocks.
+>
+> ```bash
+> # 一次性安装时间就绪链 | one-time install of the time-readiness chain
+> cp systemd/chrony-wait.service /etc/systemd/system/
+> mkdir -p /etc/systemd/system/chrony.service.d
+> cp systemd/chrony-order-dropin.conf /etc/systemd/system/chrony.service.d/m20-order.conf
+> systemctl daemon-reload && systemctl enable chrony-wait
+> ```
 
 > 注意三个易混名字:`/GRID_MAP` = map_server 的 latched 地图(OccupancyGrid);
 > `/grid_map` = passable_area 的 `grid_map_msgs/GridMap`(无关);`occ_grid` = 地图名。

@@ -1,0 +1,39 @@
+# ============================================================================
+# chrony-wait.service —— 让 time-sync.target 真正等到时钟同步(声明式,无脚本)
+#                        make time-sync.target actually wait for clock sync
+# ----------------------------------------------------------------------------
+# focal 的 chrony 包不带这个单元(上游/RHEL 有);装上它之后,任何单元只要声明
+#   Wants=time-sync.target + After=time-sync.target
+# 就会等到 chrony 同步完成(即时钟阶跃已经过去)才启动 —— 这就是 DDS 单元防
+# 楔死所需的全部等待,纯 systemd 依赖,无轮询脚本。
+# 同步失败时 180s 超时放行(target 仍会到达)—— 宁可退化启动也不卡死开机。
+#
+# focal's chrony package does not ship this unit (upstream/RHEL do). With it
+# installed, any unit declaring Wants=time-sync.target + After=time-sync.target
+# starts only after chrony has synchronised — i.e. after the clock step is
+# behind us, which is all the waiting our DDS units need. Pure systemd
+# dependencies, no polling script. On sync failure the 180 s timeout releases
+# the target — a degraded start beats a hung boot.
+#
+# 安装 | install:
+#   cp systemd/chrony-wait.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable chrony-wait
+# ============================================================================
+[Unit]
+Description=Wait for chrony to synchronize system clock
+Documentation=man:chronyc(1)
+After=chrony.service
+Requires=chrony.service
+Before=time-sync.target
+Wants=time-sync.target
+
+[Service]
+Type=oneshot
+# 同步判据:offset ≤ 0.1s,每 1s 查一次,次数不限(受 TimeoutStartSec 约束)
+# criterion: offset <= 0.1 s, checked every 1 s, unlimited tries within timeout
+ExecStart=/usr/bin/chronyc waitsync 0 0.1 0.0 1
+RemainAfterExit=yes
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
