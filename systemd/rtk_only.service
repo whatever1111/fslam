@@ -50,7 +50,7 @@ ExecStartPre=/bin/sleep 10
 # Boot readiness gate: wait out the clock step and the OEM DDS crowd (root
 # cause + measurements in the script header). Participants created on a
 # settled system pair 100% reliably — start correctly once, no healing needed.
-ExecStartPre=/home/user/fslam/tools/wait_boot_settled.sh 240
+ExecStartPre=/home/user/fslam/tools/wait_boot_settled.sh 120
 
 # 等 VRTK2 的 TCP 口可达再起驱动(上限 120s,超时告警但放行)。开机时传感网交换机
 # 比本机慢:驱动会先建好 DDS participant 再连 TCP,连不上就退出 → systemd 拉起 →

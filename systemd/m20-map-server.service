@@ -46,7 +46,7 @@ ExecStartPre=+/sbin/ip route replace 224.0.0.0/4 dev eth0
 # the OEM crowd (incl. the astar consumer) — publishing to already-present
 # readers on a settled system delivers 100%; storm-window pairings wedge
 # permanently (root cause in the script header).
-ExecStartPre=/home/user/fslam/tools/wait_boot_settled.sh 240
+ExecStartPre=/home/user/fslam/tools/wait_boot_settled.sh 120
 
 # 默认传输(SHM+UDP)。曾试过 UDP-only 防 SHM 端口毒化,但 2026-08-12 的重启验证
 # 表明:astar 对 boot 首发 latch 的接收失败与传输无关(UDP 下同样失败,疑似 OEM
