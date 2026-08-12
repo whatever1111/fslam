@@ -381,9 +381,22 @@ install once, enable at boot, leave it alone.
 
 ```bash
 cp systemd/m20-map-server.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now m20-map-server
+cp systemd/m20-map-server-kick.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now m20-map-server m20-map-server-kick.timer
 systemctl is-active m20-map-server                 # active
+systemctl list-timers m20-map-server-kick.timer    # 每次开机 T+3min 触发一次
 ```
+
+> **为什么有 kick timer:** 开机风暴期的 DDS 配对疾病(与 rsdriver 的 wedged-writer 同族)会让
+> 开机时 latch 的 `/GRID_MAP` 到不了 OEM 消费者(实测:事后探针能收到,导航侧却没收到,人工
+> 重发即通)。timer 在开机 3 分钟后把 map_server 重启一次,新 writer 对已就位的消费者重新
+> latch —— 与人工修法等价,自动化。重启间隙(约 12 s)消费者保留手里的旧地图,无影响。
+> **Why the kick timer:** the boot-storm DDS pairing disease (same family as rsdriver's
+> wedged writer) can keep the boot-time `/GRID_MAP` latch from ever reaching the OEM consumer
+> (measured: a later probe receives it, the nav side did not, and a manual re-send fixed it).
+> The timer restarts map_server once at T+3 min so a fresh writer re-latches to the now-present
+> consumers — the manual fix, automated. During the ~12 s restart gap consumers keep their
+> retained copy; no impact.
 
 > 注意三个易混名字:`/GRID_MAP` = map_server 的 latched 地图(OccupancyGrid);
 > `/grid_map` = passable_area 的 `grid_map_msgs/GridMap`(无关);`occ_grid` = 地图名。

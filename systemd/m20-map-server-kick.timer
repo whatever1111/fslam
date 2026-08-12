@@ -1,0 +1,9 @@
+[Unit]
+Description=Kick m20-map-server once, 3 min after boot
+
+[Timer]
+OnBootSec=180
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
