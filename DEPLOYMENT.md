@@ -27,6 +27,58 @@ For the bare driver with your own configuration, see `DEPLOYMENT.md` in the driv
 
 ---
 
+## 0.5 新狗部署清单(rtk_only · native)| New-robot checklist (rtk_only · native)
+
+一台新 M20 上,我们一共装 **3 个自有服务 + 2 个 drop-in**,外加禁用 1 个 OEM 服务。
+On a fresh M20 we install **3 services of our own + 2 drop-ins**, and disable 1 OEM service.
+
+| # | 文件(仓库 → 目标)file (repo → target) | 作用 purpose |
+|---|---|---|
+| 1 | `systemd/rtk_only.service` → `/etc/systemd/system/` | 定位主服务(fork 驱动 + rsp,发三话题 + handler 别名)the localization service |
+| 2 | `systemd/m20-map-server.service` → `/etc/systemd/system/` | OEM 地图发布(`/GRID_MAP` latch;OEM localization 被禁后由我们托管)the OEM map publisher |
+| 3 | `systemd/chrony-wait.service` → `/etc/systemd/system/` | 让 `time-sync.target` 真正等到时钟同步(DDS 防楔死的根基)the time barrier |
+| 4 | `systemd/handler-dds-dropin.conf` → `/etc/systemd/system/handler.service.d/dds.conf` | handler 强制 UDP(跨版本 SHM 丢大样本 → 0x312)handler on UDP |
+| 5 | `systemd/chrony-order-dropin.conf` → `/etc/systemd/system/chrony.service.d/m20-order.conf` | chrony 排在 eth1 设备之后(/dev/ptp1 竞速)chrony ordering |
+| — | `systemctl disable --now localization` | 禁用 OEM 原厂定位(否则两个 `/ODOM` 打架)disable the OEM localization |
+
+**前置条件 | prerequisites:**
+- 驱动二进制:release 包 `rtk_only_<ver>_foxy_arm64.tar.gz` 解到工作区(§1),或狗上编译(§2)
+- 本仓库工作副本在 `/home/user/fslam`(unit 路径写死了它)
+- **时钟链已就位**:`chronyc tracking` 显示 `PHC0` + `Leap status: Normal` —— 即 VRTK2→ptp4l(eth1)
+  →chrony 的链(见 §3.6 注)。新狗没有这条链先配时钟,再部署定位。
+  The VRTK2 time chain must exist first (`chronyc tracking` → PHC0 + Leap Normal).
+- 地图已放置:`/var/opt/robot/data/maps/active/occ_grid.yaml`
+
+**每台狗要改的值 | per-robot values(默认写的是 106):**
+- `systemd/rtk_only.service`:VRTK 探活 IP(`10.21.31.66:21000`)
+- `config/fixposition/fastdds_handler_udp.xml`:白名单里的本机 OEM 网 IP(`10.21.33.106`)
+- `config/fixposition/config_m20.yaml`:VRTK stream 地址;`robot.urdf` 如外参不同
+
+**安装 | install:**
+
+```bash
+cd /home/user/fslam
+sudo cp systemd/rtk_only.service systemd/m20-map-server.service systemd/chrony-wait.service /etc/systemd/system/
+sudo install -D systemd/handler-dds-dropin.conf  /etc/systemd/system/handler.service.d/dds.conf
+sudo install -D systemd/chrony-order-dropin.conf /etc/systemd/system/chrony.service.d/m20-order.conf
+sudo systemctl disable --now localization rtk_loc m20_loc m20_loc_foxy 2>/dev/null || true
+sudo systemctl daemon-reload
+sudo systemctl enable chrony-wait rtk_only m20-map-server
+sudo reboot   # 开机链自会按 time-sync → 定位/地图 → OEM 栈的顺序起来
+```
+
+重启后过一遍 §4 验证清单(重点:`handler` 日志 `Odom=10 IMU=200 Cloud=10`、
+`global_planner` 出现 `map message`、我们所有单元 `NRestarts=0`)。
+After reboot run the §4 checklist (key: handler at full rates, astar's `map message`,
+all our units at `NRestarts=0`).
+
+> 106 现状:定位单元仍用旧名 `m20_loc_foxy.service`(内容已同步最新)——迁移到 `rtk_only`
+> 见 §5。新狗直接用新名,别再引入旧名。
+> On 106 the localization unit still carries the legacy name `m20_loc_foxy.service`
+> (content is current); migration is §5. New robots use the new names only.
+
+---
+
 ## 0. 动手前必须知道的三件事 | Three things to know first
 
 1. **所有定位部署互斥。** `rtk_only.service`、`fslam.service`、以及旧代的
