@@ -1,0 +1,56 @@
+# ============================================================================
+# m20-map-server.service —— OEM 占据栅格地图发布(支持服务,与定位模式无关)
+#                           OEM occupancy-grid map publisher (support service,
+#                           independent of the localization mode)
+# ============================================================================
+# 跑的是 OEM 的原生 DrDDS 程序(Fast DDS 2.14),把 active 地图发成原生话题
+# `occ_grid`(注意:不是 ROS graph 里 passable_area 发的 /grid_map —— 两回事)。
+# 消费者是 OEM 导航栈(localPlanner 等原生 2.14 节点,同版本 DDS,无跨版本问题;
+# 读者在任务阶段才创建,平时在 ROS graph 里看不到)。
+#
+# Runs the OEM's native DrDDS binary (Fast DDS 2.14): publishes the active map
+# as native topic `occ_grid` (NOT the ROS-graph /grid_map, which belongs to
+# passable_area). Consumers are the OEM nav stack (localPlanner etc., native
+# 2.14 — same-version DDS, no cross-version concerns; readers are created
+# lazily during tasks and are invisible to the ROS graph when idle).
+#
+# 为什么归 fslam 管:OEM 的 localization.service(会起完整原厂定位,与我们的
+# /ODOM 冲突)被禁用后,地图发布这一块随之丢失 —— 单拆出来独立跑。
+# Why fslam owns this: disabling the OEM localization.service (it would start
+# the full OEM localization -> duplicate /ODOM source) also lost its map
+# publishing; this unit carves that single piece out to run standalone.
+#
+# 安装 | install:
+#   cp systemd/m20-map-server.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now m20-map-server
+# ============================================================================
+[Unit]
+Description=M20 Occupancy Grid Publisher (OEM map_server, fslam-managed)
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=root
+
+# 等 eth0 拿到 IP;再留 10s 规避 PTP 时间跳变与底层网络抖动(与 m20_loc_foxy 同款)。
+# Wait for eth0's IP, then 10 s for PTP step / link settling (same as m20_loc_foxy).
+ExecStartPre=/bin/sh -c "while ! ip -4 addr show eth0 | grep -q inet; do sleep 1; done"
+ExecStartPre=/bin/sleep 10
+# 组播路由钉在 eth0(OEM DDS 网段)。 Pin the DDS multicast route to eth0.
+ExecStartPre=+/sbin/ip route replace 224.0.0.0/4 dev eth0
+ExecStartPre=/bin/sleep 2
+
+# 原生 2.14 程序只需要它的库路径;不设 FASTRTPS_DEFAULT_PROFILES_FILE(此前指过
+# 一个不存在的文件,实际一直跑默认配置,而默认即正确 —— 同版本对端无需任何调优)。
+# The native 2.14 binary needs only its library path. No FASTRTPS profile: the
+# old hand-made unit pointed at a nonexistent file, so it always ran defaults —
+# and defaults are correct here (same-version peers, nothing to tune).
+Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib/aarch64-linux-gnu:/opt/robot/share/localization/lib
+
+ExecStart=/opt/robot/share/localization/bin/map_server /var/opt/robot/data/maps/active/occ_grid.yaml
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

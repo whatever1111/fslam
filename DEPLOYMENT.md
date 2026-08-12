@@ -363,6 +363,36 @@ Changing `odom_topic` changes the outward contract — the navigation subscriber
 
 ---
 
+## 3.6 支持服务:OEM 地图发布 | Support service: the OEM map publisher
+
+OEM 的 `localization.service` 被禁用后(它会起完整原厂定位,和我们的 `/ODOM` 冲突),
+它顺带负责的**地图发布**也没了。`systemd/m20-map-server.service` 把这一块单拆出来:
+跑 OEM 原生程序 `map_server`(Fast DDS 2.14),把 `/var/opt/robot/data/maps/active/`
+的占据栅格发成原生话题 `occ_grid`,供 OEM 导航栈(localPlanner 等)消费。
+**与定位模式无关** —— rtk_only / fslam 哪种模式都需要它,装一次、开机自启、别动。
+
+With the OEM `localization.service` disabled (it would start the full OEM localization —
+a duplicate `/ODOM` source), its **map publishing** died with it. `systemd/m20-map-server.service`
+carves that piece out: it runs the OEM-native `map_server` (Fast DDS 2.14), publishing the
+occupancy grid from `/var/opt/robot/data/maps/active/` as native topic `occ_grid` for the OEM
+nav stack (localPlanner etc.). **Mode-independent** — both rtk_only and fslam need it;
+install once, enable at boot, leave it alone.
+
+```bash
+cp systemd/m20-map-server.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now m20-map-server
+systemctl is-active m20-map-server                 # active
+```
+
+> 注意:它发的是原生 DDS 话题 `occ_grid`,**不是** ROS graph 里 `passable_area` 发的
+> `/grid_map`(`grid_map_msgs/GridMap`)—— 两个不同的话题;原生读者(任务阶段才创建)
+> 在 `ros2 topic` 里看不到,属正常。
+> Note: it publishes the native DDS topic `occ_grid` — **not** the ROS-graph `/grid_map`
+> published by `passable_area` (`grid_map_msgs/GridMap`). Native readers appear only during
+> tasks and are invisible to `ros2 topic`; that is normal.
+
+---
+
 ## 4. 验证清单 | Verification checklist
 
 ```bash
