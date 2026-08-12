@@ -1,5 +1,5 @@
 [Unit]
-Description=Kick m20-map-server once, 3 min after boot
+Description=Post-boot DDS re-pair kick, once at T+3min
 
 [Timer]
 OnBootSec=180
