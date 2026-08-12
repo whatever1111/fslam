@@ -43,15 +43,16 @@ ExecStartPre=/bin/sleep 10
 ExecStartPre=+/sbin/ip route replace 224.0.0.0/4 dev eth0
 ExecStartPre=/bin/sleep 2
 
+# 默认传输(SHM+UDP)。曾试过 UDP-only 防 SHM 端口毒化,但 2026-08-12 的重启验证
+# 表明:astar 对 boot 首发 latch 的接收失败与传输无关(UDP 下同样失败,疑似 OEM
+# 内部 LoadMap 启动竞态)—— kick timer 才是对这对配对起效的修复,UDP 无收益,
+# 按用户要求回到 SHM。
+# Default transports (SHM+UDP). A UDP-only trial against SHM port poisoning was
+# reverted: the 2026-08-12 reboot validation showed astar misses the boot-time
+# latch REGARDLESS of transport (fails over UDP too — likely an OEM-internal
+# LoadMap startup race), so the kick timer is the operative fix for this pair
+# and UDP bought nothing. Back to SHM per user preference.
 Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib/aarch64-linux-gnu:/opt/robot/share/localization/lib
-# UDP-only:12 KB 的一次性 latch 用不着 SHM,而 SHM 端口会被开机风暴里异常死亡的
-# participant 毒化 —— 2026-08-12 排查确认 /GRID_MAP 的 latch 就是这样对 astar 楔死
-# 1.5h(细节见 fastdds_handler_udp.xml 头注)。UDP 对端口毒化免疫。
-# UDP-only: a 12 KB one-shot latch gains nothing from SHM, and SHM ports get
-# poisoned by participants dying abruptly in the boot storm — verified
-# 2026-08-12 as what wedged the /GRID_MAP latch away from astar for 1.5 h (see
-# the fastdds_handler_udp.xml header). UDP is immune to port poisoning.
-Environment=FASTRTPS_DEFAULT_PROFILES_FILE=/home/user/fslam/config/fixposition/fastdds_handler_udp.xml
 
 ExecStart=/opt/robot/share/localization/bin/map_server /var/opt/robot/data/maps/active/occ_grid.yaml
 Restart=on-failure
