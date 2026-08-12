@@ -45,6 +45,20 @@ ExecStartPre=/sbin/ip route replace 224.0.0.0/4 dev eth0
 # systemctl restart rsdriver. See MEMORY: m20-lidar-points-publisher-failure.
 ExecStartPre=/bin/sleep 10
 
+# 等 VRTK2 的 TCP 口可达再起驱动(上限 120s,超时告警但放行)。开机时传感网交换机
+# 比本机慢:驱动会先建好 DDS participant 再连 TCP,连不上就退出 → systemd 拉起 →
+# 开机风暴里多一具 DDS 尸体。尸体会毒化 Fast DDS 共享内存端口,曾把别的
+# writer/reader 配对楔死(2026-08-12 排查:/GRID_MAP latch 楔死 1.5h)。
+# 先探到端口再起,进程就不会在开机窗口死亡。
+# Gate the driver start on the VRTK2 TCP port (cap 120 s, then warn and proceed).
+# At power-on the sensor-net switch lags this host; the driver creates its DDS
+# participant BEFORE the TCP connect, so a failed connect exits the process ->
+# systemd restarts it -> one more abrupt DDS death in the boot storm. Corpses
+# poison Fast DDS SHM ports and have wedged unrelated writer/reader pairings
+# (2026-08-12: the /GRID_MAP latch wedged for 1.5 h). Probing first means the
+# process never dies in the boot window.
+ExecStartPre=/bin/bash -c "timeout 120 bash -c 'until echo > /dev/tcp/10.21.31.66/21000; do sleep 2; done' 2>/dev/null && echo '[INFO] VRTK reachable' || echo '[WARN] VRTK not reachable after 120s — starting anyway'"
+
 ExecStart=/bin/bash /home/user/fslam/run_rtk_only_native.sh
 TimeoutStartSec=180
 

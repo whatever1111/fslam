@@ -43,12 +43,15 @@ ExecStartPre=/bin/sleep 10
 ExecStartPre=+/sbin/ip route replace 224.0.0.0/4 dev eth0
 ExecStartPre=/bin/sleep 2
 
-# 原生 2.14 程序只需要它的库路径;不设 FASTRTPS_DEFAULT_PROFILES_FILE(此前指过
-# 一个不存在的文件,实际一直跑默认配置,而默认即正确 —— 同版本对端无需任何调优)。
-# The native 2.14 binary needs only its library path. No FASTRTPS profile: the
-# old hand-made unit pointed at a nonexistent file, so it always ran defaults —
-# and defaults are correct here (same-version peers, nothing to tune).
 Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib/aarch64-linux-gnu:/opt/robot/share/localization/lib
+# UDP-only:12 KB 的一次性 latch 用不着 SHM,而 SHM 端口会被开机风暴里异常死亡的
+# participant 毒化 —— 2026-08-12 排查确认 /GRID_MAP 的 latch 就是这样对 astar 楔死
+# 1.5h(细节见 fastdds_handler_udp.xml 头注)。UDP 对端口毒化免疫。
+# UDP-only: a 12 KB one-shot latch gains nothing from SHM, and SHM ports get
+# poisoned by participants dying abruptly in the boot storm — verified
+# 2026-08-12 as what wedged the /GRID_MAP latch away from astar for 1.5 h (see
+# the fastdds_handler_udp.xml header). UDP is immune to port poisoning.
+Environment=FASTRTPS_DEFAULT_PROFILES_FILE=/home/user/fslam/config/fixposition/fastdds_handler_udp.xml
 
 ExecStart=/opt/robot/share/localization/bin/map_server /var/opt/robot/data/maps/active/occ_grid.yaml
 Restart=on-failure

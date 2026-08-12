@@ -46,6 +46,15 @@ done
 mkdir -p "${LOG_DIR}"
 LOG_DIR="$(realpath "${LOG_DIR}")"
 
+# 保留上一次尝试的日志:开机首次尝试若死亡,其日志是排查 boot 风暴的唯一证据
+# (2026-08-12 排查时 attempt#1 的日志已被 attempt#2 截断覆盖,死因无从考证)。
+# Keep the previous attempt's logs: if the first boot attempt dies, its log is
+# the only evidence for boot-storm forensics (during the 2026-08-12 postmortem
+# attempt #1's log had been truncated by attempt #2 — cause unrecoverable).
+for f in fixposition robot_state_publisher; do
+  [[ -s "${LOG_DIR}/${f}.log" ]] && mv -f "${LOG_DIR}/${f}.log" "${LOG_DIR}/${f}.log.prev"
+done
+
 # ---- 停掉别的部署 | stop the other deployments -------------------------------
 # 容器版(Humble)和 Python 版都发 /ODOM,同时跑会给导航两个打架的位姿源。
 # The container (Humble) and Python deployments also publish /ODOM; running any two

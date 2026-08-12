@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  UDP-only Fast DDS profile for the OEM handler.service (NOT for our driver).
+  UDP-only Fast DDS profile for OEM-side units we manage: handler.service and
+  m20-map-server.service (NOT for our driver — it needs SHM for lidar input).
 
   The OEM host mixes Fast DDS generations: the ROS 2 Foxy graph (our driver,
   rsdriver, yesense, accumulate_cloud) runs 2.1.x, while native DrDDS consumers
