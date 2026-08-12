@@ -50,7 +50,7 @@ ExecStartPre=/bin/sleep 10
 # Boot readiness gate: wait out the clock step and the OEM DDS crowd (root
 # cause + measurements in the script header). Participants created on a
 # settled system pair 100% reliably — start correctly once, no healing needed.
-ExecStartPre=/home/user/fslam/tools/wait_boot_settled.sh 150
+ExecStartPre=/home/user/fslam/tools/wait_boot_settled.sh 240
 
 # 等 VRTK2 的 TCP 口可达再起驱动(上限 120s,超时告警但放行)。开机时传感网交换机
 # 比本机慢:驱动会先建好 DDS participant 再连 TCP,连不上就退出 → systemd 拉起 →
@@ -67,7 +67,12 @@ ExecStartPre=/home/user/fslam/tools/wait_boot_settled.sh 150
 ExecStartPre=/bin/bash -c "timeout 120 bash -c 'until echo > /dev/tcp/10.21.31.66/21000; do sleep 2; done' 2>/dev/null && echo '[INFO] VRTK reachable' || echo '[WARN] VRTK not reachable after 120s — starting anyway'"
 
 ExecStart=/bin/bash /home/user/fslam/run_rtk_only_native.sh
-TimeoutStartSec=180
+# 预链最坏情形:就绪门 240s + VRTK 门 120s + 杂项 —— 默认 90s 会把门阶段杀掉重试
+# (2026-08-12 实测 map-server 因此 NRestarts=2,无害但脏)。
+# Worst-case pre-chain: 240 s gate + 120 s VRTK gate + slack — the 90 s default
+# kills the gate phase and retries (measured: map-server NRestarts=2; harmless
+# but untidy).
+TimeoutStartSec=420
 
 StandardOutput=journal
 StandardError=journal
