@@ -58,11 +58,9 @@ ExecStartPre=/sbin/ip route replace 224.0.0.0/4 dev eth0
 ExecStartPre=/bin/bash -c "timeout 120 bash -c 'until echo > /dev/tcp/10.21.31.66/21000; do sleep 2; done' 2>/dev/null && echo '[INFO] VRTK reachable' || echo '[WARN] VRTK not reachable after 120s — starting anyway'"
 
 ExecStart=/bin/bash /home/user/fslam/run_rtk_only_native.sh
-# 预链最坏情形:就绪门 240s + VRTK 门 120s + 杂项 —— 默认 90s 会把门阶段杀掉重试
-# (2026-08-12 实测 map-server 因此 NRestarts=2,无害但脏)。
-# Worst-case pre-chain: 240 s gate + 120 s VRTK gate + slack — the 90 s default
-# kills the gate phase and retries (measured: map-server NRestarts=2; harmless
-# but untidy).
+# 预链最坏情形:time-sync 释放 180s + VRTK 门 120s + 杂项 > 默认 90s。
+# Worst-case pre-chain: 180 s time-sync release + 120 s VRTK gate + slack
+# exceeds the 90 s default.
 TimeoutStartSec=420
 
 StandardOutput=journal
