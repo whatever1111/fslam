@@ -368,14 +368,15 @@ Changing `odom_topic` changes the outward contract — the navigation subscriber
 OEM 的 `localization.service` 被禁用后(它会起完整原厂定位,和我们的 `/ODOM` 冲突),
 它顺带负责的**地图发布**也没了。`systemd/m20-map-server.service` 把这一块单拆出来:
 跑 OEM 原生程序 `map_server`(Fast DDS 2.14),把 `/var/opt/robot/data/maps/active/`
-的占据栅格发成原生话题 `occ_grid`,供 OEM 导航栈(localPlanner 等)消费。
+的占据栅格 latched 发布到 `/GRID_MAP`(nav_msgs/OccupancyGrid,reliable +
+transient-local),供 OEM 导航栈(localPlanner 等)消费。
 **与定位模式无关** —— rtk_only / fslam 哪种模式都需要它,装一次、开机自启、别动。
 
 With the OEM `localization.service` disabled (it would start the full OEM localization —
 a duplicate `/ODOM` source), its **map publishing** died with it. `systemd/m20-map-server.service`
-carves that piece out: it runs the OEM-native `map_server` (Fast DDS 2.14), publishing the
-occupancy grid from `/var/opt/robot/data/maps/active/` as native topic `occ_grid` for the OEM
-nav stack (localPlanner etc.). **Mode-independent** — both rtk_only and fslam need it;
+carves that piece out: it runs the OEM-native `map_server` (Fast DDS 2.14), LATCHING the
+occupancy grid from `/var/opt/robot/data/maps/active/` on `/GRID_MAP` (nav_msgs/OccupancyGrid,
+reliable + transient-local) for the OEM nav stack (localPlanner etc.). **Mode-independent** — both rtk_only and fslam need it;
 install once, enable at boot, leave it alone.
 
 ```bash
@@ -384,12 +385,14 @@ systemctl daemon-reload && systemctl enable --now m20-map-server
 systemctl is-active m20-map-server                 # active
 ```
 
-> 注意:它发的是原生 DDS 话题 `occ_grid`,**不是** ROS graph 里 `passable_area` 发的
-> `/grid_map`(`grid_map_msgs/GridMap`)—— 两个不同的话题;原生读者(任务阶段才创建)
-> 在 `ros2 topic` 里看不到,属正常。
-> Note: it publishes the native DDS topic `occ_grid` — **not** the ROS-graph `/grid_map`
-> published by `passable_area` (`grid_map_msgs/GridMap`). Native readers appear only during
-> tasks and are invisible to `ros2 topic`; that is normal.
+> 注意三个易混名字:`/GRID_MAP` = map_server 的 latched 地图(OccupancyGrid);
+> `/grid_map` = passable_area 的 `grid_map_msgs/GridMap`(无关);`occ_grid` = 地图名。
+> latched 话题只有 transient-local 订阅者能拿到已发布的地图;原生 writer 在
+> `ros2 topic info` 里可能显示 0 publisher —— 以 transient-local 订阅收到为准:
+> Three easily-confused names: `/GRID_MAP` = map_server's latched map (OccupancyGrid);
+> `/grid_map` = passable_area's `grid_map_msgs/GridMap` (unrelated); `occ_grid` = the map NAME.
+> Only transient-local subscribers receive the latched map, and the native writer may show
+> 0 publishers in `ros2 topic info` — judge by reception with a transient-local reader.
 
 ---
 

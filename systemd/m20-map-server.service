@@ -3,16 +3,18 @@
 #                           OEM occupancy-grid map publisher (support service,
 #                           independent of the localization mode)
 # ============================================================================
-# 跑的是 OEM 的原生 DrDDS 程序(Fast DDS 2.14),把 active 地图发成原生话题
-# `occ_grid`(注意:不是 ROS graph 里 passable_area 发的 /grid_map —— 两回事)。
-# 消费者是 OEM 导航栈(localPlanner 等原生 2.14 节点,同版本 DDS,无跨版本问题;
-# 读者在任务阶段才创建,平时在 ROS graph 里看不到)。
+# 跑的是 OEM 的原生 DrDDS 程序(Fast DDS 2.14),把 active 地图 latched 发布到
+# `/GRID_MAP`(nav_msgs/OccupancyGrid,reliable + transient-local;`occ_grid`
+# 是地图名不是话题名;ROS graph 里 passable_area 发的 /grid_map 是另一回事)。
+# 消费者是 OEM 导航栈的 transient-local 读者;原生 writer 在 Foxy graph 里
+# 时隐时现,以订阅收到为准。
 #
-# Runs the OEM's native DrDDS binary (Fast DDS 2.14): publishes the active map
-# as native topic `occ_grid` (NOT the ROS-graph /grid_map, which belongs to
-# passable_area). Consumers are the OEM nav stack (localPlanner etc., native
-# 2.14 — same-version DDS, no cross-version concerns; readers are created
-# lazily during tasks and are invisible to the ROS graph when idle).
+# Runs the OEM's native DrDDS binary (Fast DDS 2.14): LATCHES the active map on
+# `/GRID_MAP` (nav_msgs/OccupancyGrid, reliable + transient-local; `occ_grid`
+# is the map NAME, not the topic — and the ROS-graph /grid_map from
+# passable_area is unrelated). Consumers are the OEM nav stack's
+# transient-local readers; the native writer's graph visibility is flaky, so
+# judge by reception, not `ros2 topic info`.
 #
 # 为什么归 fslam 管:OEM 的 localization.service(会起完整原厂定位,与我们的
 # /ODOM 冲突)被禁用后,地图发布这一块随之丢失 —— 单拆出来独立跑。
