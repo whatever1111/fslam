@@ -33,9 +33,17 @@ fslam_stop_pidfile() {
   [[ -f "${f}" ]] || return 0
   pid="$(<"${f}")"
   if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
-    kill -INT "${pid}" 2>/dev/null || true
+    # setsid 起的进程是组长 —— 整组杀。只杀组长会把 ros2-run 的子进程(真正的
+    # 驱动二进制)留成孤儿:2026-08-13 实测两个孤儿驱动占着 VRTK TCP 流,把新
+    # 驱动饿到 0 odometry。组杀失败(非组长)再退回单杀。
+    # setsid children lead their own process group — kill the GROUP. Killing
+    # just the leader orphans ros2-run's child (the real driver binary):
+    # measured 2026-08-13, two orphaned drivers starved the fresh one to
+    # 0 odometry over the shared VRTK TCP stream. Fall back to single-pid
+    # kill for non-leaders.
+    kill -INT -- "-${pid}" 2>/dev/null || kill -INT "${pid}" 2>/dev/null || true
     sleep 2
-    kill "${pid}" 2>/dev/null || true
+    kill -- "-${pid}" 2>/dev/null || kill "${pid}" 2>/dev/null || true
   fi
   rm -f "${f}"
 }

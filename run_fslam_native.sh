@@ -29,7 +29,7 @@
 #   --fp-config <yaml>   FP 驱动配置(默认 tarball 内 config/fixposition/m20.yaml)
 #   --fp-stream <uri>    覆盖 FP 传感器流地址(如 tcpcli://10.21.31.66:21000)
 #   --no-fixposition     不启驱动(RTK 已由别处提供)
-#   --lidar-topic <t>    雷达话题(默认 /LIDAR/POINTS2 —— 当前固件;旧 bag 是 /LIDAR/POINTS)
+#   --lidar-topic <t>    雷达话题(默认 /LIDAR/POINTS —— 106 固件实测;别信 POINTS2)
 #   --odom-topic <t>     管线直出话题(默认 /ODOM;空串 = 保持 /odom)
 #   --domain <id>        ROS_DOMAIN_ID(默认 0)
 #   --param-overlay <f>  在线改参 overlay(最高优先级层,与注入段合并)
@@ -61,7 +61,7 @@ PROFILE="m20"
 FP_CONFIG=""
 FP_STREAM="${FP_STREAM:-}"
 START_FIXPOSITION=1
-LIDAR_TOPIC="${LIDAR_TOPIC:-/LIDAR/POINTS2}"
+LIDAR_TOPIC="${LIDAR_TOPIC:-/LIDAR/POINTS}"
 ODOM_TOPIC="/ODOM"
 USER_OVERLAY=""
 DO_CHECK=0
@@ -107,6 +107,14 @@ stop_all() {
   fi
   local f
   for f in "${PID_FILES[@]}"; do fslam_stop_pidfile "${f}"; done
+  # 兜底:按路径特征清掉逃出进程组的孤儿(run_prod_native 内部会再 setsid,
+  # 组杀够不着)。模式锚定在本部署的专属路径上,绝不误伤 rtk_only 的驱动。
+  # Backstop: pattern-kill orphans that escaped their process groups
+  # (run_prod_native setsids again internally). Patterns anchor on paths
+  # exclusive to THIS deployment — the rtk_only driver can never match.
+  pkill -f "logs/fslam_native/fixposition_runtime[.]yaml" 2>/dev/null || true
+  pkill -f "${SLAM_DIR}/install" 2>/dev/null || true
+  sleep 1
 }
 
 if [[ "${DO_STOP}" == "1" ]]; then

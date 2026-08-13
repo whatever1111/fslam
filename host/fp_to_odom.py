@@ -256,6 +256,14 @@ class FixpositionOdomRelay(Node):
         # matching health source (fslam-mode container odom). "" disables →
         # matching_error always normal (fixposition-only mode has no matching).
         self.declare_parameter("matching_odom_topic", "")
+        # OEM handler 契约:/LIO_ODOM + /cloud_nav(reliable)。handler 的安全门只认
+        # 这对旧接口(0x312 排查结论);rtk_only 模式由 fork 驱动发,fslam 模式在
+        # 这里发。空串禁用。
+        # The OEM handler safety gate consumes the legacy /LIO_ODOM + /cloud_nav
+        # pair (0x312 postmortem); the fork driver provides them in rtk_only
+        # mode, this node provides them in fslam mode. "" disables.
+        self.declare_parameter("handler_odom_topic", "/LIO_ODOM")
+        self.declare_parameter("handler_cloud_topic", "/cloud_nav")
         self.declare_parameter("lidar_timeout_sec", 0.5)
         self.declare_parameter("imu_timeout_sec", 0.3)
         self.declare_parameter("leg_odom_timeout_sec", 0.5)
@@ -368,6 +376,21 @@ class FixpositionOdomRelay(Node):
             self.get_logger().info(
                 f"Relay disabled — {output_topic} is published directly by the fslam pipeline; "
                 f"tracking it as the pose/stamp source"
+            )
+
+        # ---- handler 别名 | handler aliases ----
+        handler_odom_topic = str(self.get_parameter("handler_odom_topic").value or "")
+        handler_cloud_topic = str(self.get_parameter("handler_cloud_topic").value or "")
+        self.handler_odom_pub_ = (
+            self.create_publisher(Odometry, handler_odom_topic, pub_qos) if handler_odom_topic else None
+        )
+        self.handler_cloud_pub_ = (
+            self.create_publisher(PointCloud2, handler_cloud_topic, pub_qos) if handler_cloud_topic else None
+        )
+        if self.handler_odom_pub_ or self.handler_cloud_pub_:
+            self.get_logger().info(
+                f"Handler compatibility aliases: odom={handler_odom_topic or 'off'}, "
+                f"cloud={handler_cloud_topic or 'off'} (reliable)"
             )
 
         # ---- /LOC_BODY_POINTS ----
@@ -525,6 +548,20 @@ class FixpositionOdomRelay(Node):
                 self.get_logger().error(f"Failed to publish odometry: {exc}", throttle_duration_sec=5.0)
                 return
 
+        if self.handler_odom_pub_ is not None:
+            alias = Odometry()
+            alias.header.frame_id = msg.header.frame_id
+            alias.header.stamp.sec = sec
+            alias.header.stamp.nanosec = nsec
+            alias.child_frame_id = self.target_child_frame_id or msg.child_frame_id
+            alias.pose.pose = msg.pose.pose
+            alias.twist.twist = msg.twist.twist
+            try:
+                self.handler_odom_pub_.publish(alias)
+            except Exception as exc:  # pragma: no cover
+                self._mark_err("pub")
+                self.get_logger().error(f"Failed to publish handler odom alias: {exc}", throttle_duration_sec=5.0)
+
         t = sec + nsec * 1e-9
         vel = np.array([lv.x, lv.y, lv.z]) if np is not None else None
         with self._state_lock:
@@ -636,6 +673,12 @@ class FixpositionOdomRelay(Node):
         except Exception as exc:  # pragma: no cover
             self._mark_err("pub")
             self.get_logger().error(f"Failed to publish body points: {exc}", throttle_duration_sec=5.0)
+        if self.handler_cloud_pub_ is not None:
+            try:
+                self.handler_cloud_pub_.publish(out)
+            except Exception as exc:  # pragma: no cover
+                self._mark_err("pub")
+                self.get_logger().error(f"Failed to publish handler cloud alias: {exc}", throttle_duration_sec=5.0)
         pub_ms = (time.monotonic() - t_pub) * 1e3
 
         # /LOCATION_STATUS shares the same stamp as the cloud (= newest /ODOM),
