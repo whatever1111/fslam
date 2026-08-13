@@ -118,8 +118,13 @@ echo "[INFO] 录制 ${DURATION}s → ${BAG}(话题 ${#TOPICS[@]} 个,预估 ~$((
 echo "[INFO] recording ${DURATION}s, ${#TOPICS[@]} topics, ~$(( DURATION * RATE_MBS )) MB expected"
 # nice + 单独进程组;超时后 SIGINT 让 rosbag2 干净收尾(写 metadata)。
 # nice + own process group; SIGINT lets rosbag2 finalize metadata cleanly.
+# --max-cache-size:Foxy 默认逐条落盘,IO 停顿时 BE 大样本(雷达帧)会被丢
+# (实测丢 ~17%);128 MB 内存缓冲把写盘和订阅解耦。
+# Foxy's default writes every message straight to disk; IO stalls drop
+# best-effort samples (measured ~17% lidar loss). A 128 MB cache decouples them.
 nice -n 10 timeout --signal=INT "${DURATION}" \
   ros2 bag record -o "${BAG}" --qos-profile-overrides-path "${QOS_FILE}" \
+  --max-cache-size 134217728 \
   "${TOPICS[@]}" || true
 rm -f "${QOS_FILE}"
 
