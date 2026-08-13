@@ -167,9 +167,24 @@ print_counts() {
   grep -E "name:|message_count:" "$1/metadata.yaml" 2>/dev/null \
     | sed 's/^ *//' | paste - - | grep -v topics_with || true
 }
+# Foxy rosbag2 落盘是 WAL journal 模式 —— 只读挂载(docker 评测 -v :ro)下
+# sqlite 无法建 -wal/-shm 附属文件,回放直接 SQLITE_CANTOPEN(14)。落盘后
+# 切回 DELETE 模式(瞬时操作,不重写数据),取回即可只读回放。
+# Foxy rosbag2 writes WAL-journal databases — replay through a read-only
+# mount (docker eval -v :ro) fails with SQLITE_CANTOPEN(14) because sqlite
+# cannot create the -wal/-shm sidecars. Flip to DELETE mode after recording
+# (instant, no data rewrite) so fetched bags replay read-only as-is.
+fix_journal() {
+  local db
+  for db in "$1"/*.db3; do
+    [[ -f "${db}" ]] && python3 -c "import sqlite3; c=sqlite3.connect('${db}'); c.execute('PRAGMA journal_mode=DELETE'); c.close()" 2>/dev/null || true
+  done
+}
 echo ""
 echo "[INFO] 完成 | done:"
 du -sh "${BAG}" 2>/dev/null || { echo "[ERROR] bag 目录缺失 | bag missing" >&2; exit 1; }
+fix_journal "${BAG}"
+[[ "${WITH_REF}" == "1" ]] && fix_journal "${BAG_REF}"
 # 录制以 root 跑,归还给 user 方便取回 | recorded as root; hand back to user
 id user >/dev/null 2>&1 && chown -R user:user "${BAG}"
 echo "[INFO] 输入话题条数 | input topic counts:"
