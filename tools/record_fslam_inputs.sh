@@ -131,8 +131,27 @@ echo "[INFO] recording ${DURATION}s, ${#TOPICS[@]} topics, ~$(( DURATION * RATE_
 # under nice where losses don't matter. No --max-cache-size: Foxy counts
 # MESSAGES not bytes, and SIGINT does not flush the cache — metadata counts
 # diverge from db contents and the tail batch is lost (measured).
+# 参考 recorder 必须 UDP-only:第二个并发 rosbag2(同名 rosbag2_recorder 节点、
+# 默认 SHM)订阅成功但收 0 条(实测);挂 handler 的 UDP-only profile 后全量收齐
+# (103/103,连 /LOC_BODY_POINTS 都比单独 SHM 录得全)。参考话题的 writer 都是
+# 我们的驱动,UDP 通路已被 handler 每天验证。输入 recorder 保持默认 transports
+# (OEM 雷达 writer 只走同版本 SHM)。
+# The reference recorder must be UDP-only: a second concurrent rosbag2 (same
+# rosbag2_recorder node name, default SHM) subscribes fine yet receives ZERO
+# (measured); with the handler's UDP-only profile it captures everything
+# (103/103 — even /LOC_BODY_POINTS records more completely than solo over
+# SHM). All reference writers are our driver, whose UDP path the handler
+# exercises daily. The inputs recorder keeps default transports (the OEM
+# lidar writer delivers over same-version SHM only).
+FSLAM_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+UDP_PROFILE="${FSLAM_ROOT}/config/fixposition/fastdds_handler_udp.xml"
 REF_PID=""
 if [[ "${WITH_REF}" == "1" ]]; then
+  if [[ ! -f "${UDP_PROFILE}" ]]; then
+    echo "[ERROR] UDP profile 缺失 | missing: ${UDP_PROFILE}(参考 recorder 必需)" >&2
+    exit 1
+  fi
+  FASTRTPS_DEFAULT_PROFILES_FILE="${UDP_PROFILE}" \
   nice -n 10 timeout --signal=INT "${DURATION}" \
     ros2 bag record -o "${BAG_REF}" --qos-profile-overrides-path "${QOS_FILE}" \
     "${REF_TOPICS[@]}" >/dev/null 2>&1 &
