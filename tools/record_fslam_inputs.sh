@@ -78,10 +78,16 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 BAG="${OUTDIR}/fslam_inputs_${STAMP}"
 
 # QoS overrides:全部 BE/volatile | all best_effort/volatile
+# 例外 /tf_static:它的 writer 是 transient_local 锁存,volatile reader 永远收不到
+# 已发布的静态 TF —— 必须用 transient_local 才能录到锁存历史。
+# Exception /tf_static: its writers are transient_local latches; a volatile
+# reader receives NOTHING already published — transient_local gets the latch.
 QOS_FILE="${OUTDIR}/.qos_overrides_${STAMP}.yaml"
 {
   for t in "${TOPICS[@]}"; do
-    printf '%s:\n  reliability: best_effort\n  durability: volatile\n  history: keep_last\n  depth: 50\n' "${t}"
+    dur=volatile
+    [[ "${t}" == "/tf_static" ]] && dur=transient_local
+    printf '%s:\n  reliability: best_effort\n  durability: %s\n  history: keep_last\n  depth: 50\n' "${t}" "${dur}"
   done
 } > "${QOS_FILE}"
 
