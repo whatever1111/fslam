@@ -86,6 +86,7 @@ fi
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 BAG="${OUTDIR}/fslam_inputs_${STAMP}"
+BAG_REF="${OUTDIR}/fslam_ref_${STAMP}"
 
 # QoS overrides:全部 BE/volatile | all best_effort/volatile
 # 例外 /tf_static:它的 writer 是 transient_local 锁存,volatile reader 永远收不到
@@ -118,22 +119,47 @@ echo "[INFO] 录制 ${DURATION}s → ${BAG}(话题 ${#TOPICS[@]} 个,预估 ~$((
 echo "[INFO] recording ${DURATION}s, ${#TOPICS[@]} topics, ~$(( DURATION * RATE_MBS )) MB expected"
 # nice + 单独进程组;超时后 SIGINT 让 rosbag2 干净收尾(写 metadata)。
 # nice + own process group; SIGINT lets rosbag2 finalize metadata cleanly.
-# --max-cache-size:Foxy 默认逐条落盘,IO 停顿时 BE 大样本(雷达帧)会被丢
-# (实测丢 ~17%);128 MB 内存缓冲把写盘和订阅解耦。
-# Foxy's default writes every message straight to disk; IO stalls drop
-# best-effort samples (measured ~17% lidar loss). A 128 MB cache decouples them.
-nice -n 10 timeout --signal=INT "${DURATION}" \
+# 双 recorder 拆分:单进程录三路 ~1MB@10Hz 点云会丢 ~15% 雷达帧(A/B 实测:
+# 18 话题一起录 = 雷达 112/128,仅输入话题 = 131/131 无损)。输入 bag(回放评测
+# 的原料)单独一个 recorder、正常优先级保无损;参考 bag(对照轨迹)另一个
+# recorder 加 nice,丢帧无所谓。不用 --max-cache-size:Foxy 语义是条数不是字节,
+# 且 SIGINT 不冲刷缓存 —— metadata 计数与 db 内容不符,尾巴整批丢失(实测)。
+# Two-recorder split: one process recording three ~1MB@10Hz clouds drops ~15%
+# of lidar frames (A/B measured: 18 topics together = 112/128 lidar, inputs
+# only = 131/131 lossless). The inputs bag (replay material) gets its own
+# recorder at normal priority; the reference bag (comparison track) records
+# under nice where losses don't matter. No --max-cache-size: Foxy counts
+# MESSAGES not bytes, and SIGINT does not flush the cache — metadata counts
+# diverge from db contents and the tail batch is lost (measured).
+REF_PID=""
+if [[ "${WITH_REF}" == "1" ]]; then
+  nice -n 10 timeout --signal=INT "${DURATION}" \
+    ros2 bag record -o "${BAG_REF}" --qos-profile-overrides-path "${QOS_FILE}" \
+    "${REF_TOPICS[@]}" >/dev/null 2>&1 &
+  REF_PID=$!
+fi
+timeout --signal=INT "${DURATION}" \
   ros2 bag record -o "${BAG}" --qos-profile-overrides-path "${QOS_FILE}" \
-  --max-cache-size 134217728 \
-  "${TOPICS[@]}" || true
+  "${INPUT_TOPICS[@]}" || true
+[[ -n "${REF_PID}" ]] && wait "${REF_PID}" 2>/dev/null || true
 rm -f "${QOS_FILE}"
 
+print_counts() {
+  grep -E "name:|message_count:" "$1/metadata.yaml" 2>/dev/null \
+    | sed 's/^ *//' | paste - - | grep -v topics_with || true
+}
 echo ""
 echo "[INFO] 完成 | done:"
 du -sh "${BAG}" 2>/dev/null || { echo "[ERROR] bag 目录缺失 | bag missing" >&2; exit 1; }
 # 录制以 root 跑,归还给 user 方便取回 | recorded as root; hand back to user
 id user >/dev/null 2>&1 && chown -R user:user "${BAG}"
-echo "[INFO] 各话题条数 | per-topic counts:"
-grep -A2 "topic_metadata" "${BAG}/metadata.yaml" 2>/dev/null | grep -E "name:|message_count" | paste - - | sed 's/^ *//' || true
+echo "[INFO] 输入话题条数 | input topic counts:"
+print_counts "${BAG}"
+if [[ "${WITH_REF}" == "1" ]]; then
+  du -sh "${BAG_REF}" 2>/dev/null || echo "[WARN] 参考 bag 缺失 | reference bag missing" >&2
+  id user >/dev/null 2>&1 && chown -R user:user "${BAG_REF}" 2>/dev/null
+  echo "[INFO] 参考话题条数 | reference topic counts:"
+  print_counts "${BAG_REF}"
+fi
 echo ""
-echo "[INFO] 取回 | fetch: tar czf - -C ${OUTDIR} $(basename "${BAG}") | ssh <dev> 'tar xzf - -C ~/bags'"
+echo "[INFO] 取回 | fetch: tar czf - -C ${OUTDIR} $(basename "${BAG}")$([[ "${WITH_REF}" == "1" ]] && echo " $(basename "${BAG_REF}")") | ssh <dev> 'tar xzf - -C ~/bags'"
