@@ -27,6 +27,16 @@
 # ============================================================================
 set -euo pipefail
 
+# 必须 root:所有 writer(OEM 栈 + 我们的驱动)都是 root,Fast DDS SHM 不跨
+# UID —— 非 root 的 recorder 订阅成功但收不到任何数据,产出空 bag(实测 52 KB)。
+# Must be root: every writer (OEM stack + our driver) runs as root, and Fast DDS
+# SHM does not cross UIDs — a non-root recorder subscribes fine yet receives
+# nothing and writes an empty bag (measured: 52 KB).
+if [[ ${EUID} -ne 0 ]]; then
+  echo "[ERROR] 必须以 root 运行(SHM 不跨 UID,非 root 录出来是空包)| must run as root" >&2
+  exit 1
+fi
+
 DURATION=120
 OUTDIR=/home/user/bags
 WITH_REF=1
@@ -94,6 +104,13 @@ QOS_FILE="${OUTDIR}/.qos_overrides_${STAMP}.yaml"
 set +u
 # shellcheck disable=SC1091
 source /opt/ros/foxy/setup.bash
+# fpa 话题的 typesupport 在 m20_ws(fixposition_driver_msgs)—— 不 source 的话
+# rosbag2 静默跳过这些话题(实测只订到 7/18)。drdds 装在系统路径,无需额外 source。
+# The fpa topics' typesupport lives in m20_ws (fixposition_driver_msgs) — without
+# it rosbag2 silently skips them (measured: only 7/18 subscribed). drdds is on
+# the system path already.
+# shellcheck disable=SC1091
+[[ -f /home/user/m20_ws/install/setup.bash ]] && source /home/user/m20_ws/install/setup.bash
 set -u
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
@@ -109,6 +126,8 @@ rm -f "${QOS_FILE}"
 echo ""
 echo "[INFO] 完成 | done:"
 du -sh "${BAG}" 2>/dev/null || { echo "[ERROR] bag 目录缺失 | bag missing" >&2; exit 1; }
+# 录制以 root 跑,归还给 user 方便取回 | recorded as root; hand back to user
+id user >/dev/null 2>&1 && chown -R user:user "${BAG}"
 echo "[INFO] 各话题条数 | per-topic counts:"
 grep -A2 "topic_metadata" "${BAG}/metadata.yaml" 2>/dev/null | grep -E "name:|message_count" | paste - - | sed 's/^ *//' || true
 echo ""
