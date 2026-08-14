@@ -11,7 +11,10 @@
 #
 # 用法 | usage:
 #   ./record_fslam_inputs.sh [-d 秒 seconds] [-o 输出目录 outdir] [--no-reference]
-#     -d  录制时长,默认 120s | duration, default 120 s
+#     -d  录制时长,默认 120s;-d 0 = 一直录,Ctrl-C 手动停止(会正常收尾:
+#         metadata、journal 转换、chown 都会执行)
+#         duration, default 120 s; -d 0 = record until Ctrl-C (finalization —
+#         metadata, journal flip, chown — still runs)
 #     -o  bag 输出目录,默认 /home/user/bags | output dir, default /home/user/bags
 #     --no-reference  不录 rtk_only 输出参考 | skip the rtk_only reference outputs
 #
@@ -74,14 +77,22 @@ if [[ "${WITH_REF}" == "1" ]]; then
   RATE_MBS=24
 fi
 
-# 磁盘余量检查 | disk guard
-need_mb=$(( DURATION * RATE_MBS * 3 / 2 ))
-free_mb=$(df -m --output=avail "${OUTDIR%/*}" 2>/dev/null | tail -1 | tr -d ' ')
+# 磁盘余量检查 | disk guard(-d 0 手动模式:要求 ≥3 GB 起步并告知按当前余量
+# 大约还能录多久,由人负责及时 Ctrl-C)
 mkdir -p "${OUTDIR}"
 free_mb=$(df -m --output=avail "${OUTDIR}" | tail -1 | tr -d ' ')
-if [[ "${free_mb}" -lt "${need_mb}" ]]; then
-  echo "[ERROR] 磁盘不够 | not enough disk: need ~${need_mb} MB, free ${free_mb} MB (${OUTDIR})" >&2
-  exit 1
+if [[ "${DURATION}" == "0" ]]; then
+  if [[ "${free_mb}" -lt 3000 ]]; then
+    echo "[ERROR] 磁盘不够 | not enough disk for manual recording: free ${free_mb} MB < 3000 MB (${OUTDIR})" >&2
+    exit 1
+  fi
+  echo "[INFO] 手动模式 | manual mode: ~${RATE_MBS} MB/s → 余量约可录 $(( free_mb * 2 / 3 / RATE_MBS / 60 )) 分钟 | ~$(( free_mb * 2 / 3 / RATE_MBS / 60 )) min of disk at current rates"
+else
+  need_mb=$(( DURATION * RATE_MBS * 3 / 2 ))
+  if [[ "${free_mb}" -lt "${need_mb}" ]]; then
+    echo "[ERROR] 磁盘不够 | not enough disk: need ~${need_mb} MB, free ${free_mb} MB (${OUTDIR})" >&2
+    exit 1
+  fi
 fi
 
 STAMP=$(date +%Y%m%d_%H%M%S)
@@ -145,6 +156,15 @@ echo "[INFO] recording ${DURATION}s, ${#TOPICS[@]} topics, ~$(( DURATION * RATE_
 # lidar writer delivers over same-version SHM only).
 FSLAM_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 UDP_PROFILE="${FSLAM_ROOT}/config/fixposition/fastdds_handler_udp.xml"
+# -d 0 手动模式:不套 timeout;Ctrl-C(SIGINT 打到整个前台进程组,两个
+# recorder 都会收到并干净收尾)后脚本靠 trap 存活,继续执行下面的收尾段
+# (journal 转换 / chown / 计数)。定时模式行为不变。
+# -d 0 manual mode: no timeout wrapper; Ctrl-C SIGINTs the whole foreground
+# process group (both recorders shut down cleanly) and the trap keeps THIS
+# script alive so the finalization below (journal flip / chown / counts)
+# still runs. Timed mode is unchanged.
+TMO=()
+[[ "${DURATION}" != "0" ]] && TMO=(timeout --signal=INT "${DURATION}")
 REF_PID=""
 if [[ "${WITH_REF}" == "1" ]]; then
   if [[ ! -f "${UDP_PROFILE}" ]]; then
@@ -152,15 +172,18 @@ if [[ "${WITH_REF}" == "1" ]]; then
     exit 1
   fi
   FASTRTPS_DEFAULT_PROFILES_FILE="${UDP_PROFILE}" \
-  nice -n 10 timeout --signal=INT "${DURATION}" \
+  nice -n 10 ${TMO[@]+"${TMO[@]}"} \
     ros2 bag record -o "${BAG_REF}" --qos-profile-overrides-path "${QOS_FILE}" \
     "${REF_TOPICS[@]}" >/dev/null 2>&1 &
   REF_PID=$!
 fi
-timeout --signal=INT "${DURATION}" \
+[[ "${DURATION}" == "0" ]] && echo "[INFO] 录制中,Ctrl-C 停止 | recording — press Ctrl-C to stop"
+trap ' ' INT
+${TMO[@]+"${TMO[@]}"} \
   ros2 bag record -o "${BAG}" --qos-profile-overrides-path "${QOS_FILE}" \
   "${INPUT_TOPICS[@]}" || true
 [[ -n "${REF_PID}" ]] && wait "${REF_PID}" 2>/dev/null || true
+trap - INT
 rm -f "${QOS_FILE}"
 
 print_counts() {
