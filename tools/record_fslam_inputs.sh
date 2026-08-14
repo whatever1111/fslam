@@ -156,13 +156,17 @@ echo "[INFO] recording ${DURATION}s, ${#TOPICS[@]} topics, ~$(( DURATION * RATE_
 # lidar writer delivers over same-version SHM only).
 FSLAM_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 UDP_PROFILE="${FSLAM_ROOT}/config/fixposition/fastdds_handler_udp.xml"
-# -d 0 手动模式:不套 timeout;Ctrl-C(SIGINT 打到整个前台进程组,两个
-# recorder 都会收到并干净收尾)后脚本靠 trap 存活,继续执行下面的收尾段
-# (journal 转换 / chown / 计数)。定时模式行为不变。
-# -d 0 manual mode: no timeout wrapper; Ctrl-C SIGINTs the whole foreground
-# process group (both recorders shut down cleanly) and the trap keeps THIS
-# script alive so the finalization below (journal flip / chown / counts)
-# still runs. Timed mode is unchanged.
+# recorder 都放进独立会话(setsid):终端 Ctrl-C 只打到本脚本,由脚本转发
+# **一次** INT 给两个 recorder;之后再按 Ctrl-C 只打印提示,绝不会打断
+# rosbag2 的收尾(实测 2026-08-14:第二下 Ctrl-C 打死了正在
+# "Writing remaining messages" 的 recorder → metadata 空文件 + WAL 残留,
+# 只能手工从 db3 重建 metadata 才救回)。定时模式仍由 timeout 发 INT。
+# Recorders run in their own sessions (setsid): terminal Ctrl-C reaches only
+# this script, which forwards a SINGLE INT to both recorders; further Ctrl-C
+# presses print a notice instead of killing rosbag2 mid-finalize (measured
+# 2026-08-14: a second Ctrl-C during "Writing remaining messages" left an
+# empty metadata.yaml + WAL sidecars, recovered only by manually rebuilding
+# metadata from the db3). Timed mode still stops via timeout's INT.
 TMO=()
 [[ "${DURATION}" != "0" ]] && TMO=(timeout --signal=INT "${DURATION}")
 REF_PID=""
@@ -172,17 +176,33 @@ if [[ "${WITH_REF}" == "1" ]]; then
     exit 1
   fi
   FASTRTPS_DEFAULT_PROFILES_FILE="${UDP_PROFILE}" \
-  nice -n 10 ${TMO[@]+"${TMO[@]}"} \
+  setsid nice -n 10 ${TMO[@]+"${TMO[@]}"} \
     ros2 bag record -o "${BAG_REF}" --qos-profile-overrides-path "${QOS_FILE}" \
     "${REF_TOPICS[@]}" >/dev/null 2>&1 &
   REF_PID=$!
 fi
-[[ "${DURATION}" == "0" ]] && echo "[INFO] 录制中,Ctrl-C 停止 | recording — press Ctrl-C to stop"
-trap ' ' INT
-${TMO[@]+"${TMO[@]}"} \
+setsid ${TMO[@]+"${TMO[@]}"} \
   ros2 bag record -o "${BAG}" --qos-profile-overrides-path "${QOS_FILE}" \
-  "${INPUT_TOPICS[@]}" || true
-[[ -n "${REF_PID}" ]] && wait "${REF_PID}" 2>/dev/null || true
+  "${INPUT_TOPICS[@]}" &
+IN_PID=$!
+[[ "${DURATION}" == "0" ]] && echo "[INFO] 录制中,Ctrl-C 停止 | recording — press Ctrl-C to stop"
+STOP_SENT=0
+on_int() {
+  if [[ "${STOP_SENT}" == "0" ]]; then
+    STOP_SENT=1
+    echo ""
+    echo "[INFO] 停止录制,收尾中(请勿再按 Ctrl-C)| stopping — finalizing, do NOT press Ctrl-C again"
+    kill -INT -- "-${IN_PID}" 2>/dev/null || true
+    if [[ -n "${REF_PID}" ]]; then kill -INT -- "-${REF_PID}" 2>/dev/null || true; fi
+  else
+    echo "[INFO] 仍在收尾,请稍等 | still finalizing, please wait"
+  fi
+}
+trap on_int INT
+while kill -0 "${IN_PID}" 2>/dev/null; do wait "${IN_PID}" 2>/dev/null || true; done
+if [[ -n "${REF_PID}" ]]; then
+  while kill -0 "${REF_PID}" 2>/dev/null; do wait "${REF_PID}" 2>/dev/null || true; done
+fi
 trap - INT
 rm -f "${QOS_FILE}"
 
