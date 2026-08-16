@@ -44,4 +44,4 @@ Three consumers need the leg speed today and each reads it its own way, none wit
 3. 老 bag 离线重打时戳:收端时刻吸附到 50 ms 格(逐帧计数,≥75 ms 间隙记丢帧),用于先在 dev 机 A/B。
 
 ### 验收 | Acceptance
-`ros2 topic hz /leg_odom/twist` ≈20 Hz;stamp 与 `/fixposition/fpa/corrimu` 同基;`ros2 topic info -v /MOTION_INFO` 只剩 OEM 读者 + 本 bridge;3× degrade 回放对比 baseline(pull 1.6–3.2 m 带内噪声,须看均值)。
+`ros2 topic hz /leg_odom/twist` ≈20 Hz;stamp 与 `/fixposition/fpa/corrimu` 同基;`ros2 topic info -v /MOTION_INFO` 只剩 OEM 读者 + 本 bridge;3× degrade 回放对比 baseline(pull 1.6–3.2 m 带内噪声,须看均值)。注意 08-15 实测:腿速在 m20_0814_degrade 的室内段(建筑物内,慢速多转弯)∫vx 少 19%,室外少 10-12% —— 不是恒定尺度;前端融合此路已证不通,本 bridge 的价值在 FP 驱动/PGO 共用一个带时戳标定源。
