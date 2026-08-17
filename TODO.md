@@ -45,3 +45,9 @@ Three consumers need the leg speed today and each reads it its own way, none wit
 
 ### 验收 | Acceptance
 `ros2 topic hz /leg_odom/twist` ≈20 Hz;stamp 与 `/fixposition/fpa/corrimu` 同基;`ros2 topic info -v /MOTION_INFO` 只剩 OEM 读者 + 本 bridge;3× degrade 回放对比 baseline(pull 1.6–3.2 m 带内噪声,须看均值)。注意 08-15 实测:腿速在 m20_0814_degrade 的室内段(建筑物内,慢速多转弯)∫vx 少 19%,室外少 10-12% —— 不是恒定尺度;前端融合此路已证不通,本 bridge 的价值在 FP 驱动/PGO 共用一个带时戳标定源。
+
+## verify_drive.sh (2026-08-18) — what to run on the next drive
+- Recording drive: `sudo tools/verify_drive.sh` (record + lidar header-stamp probe; bring the bag back).
+- Live drive: `sudo tools/verify_drive.sh --start-slam` (recording auto-off — pipeline + recorders saturate
+  the 4-core dog: load 15, FE latency 2.3 s): `[REFIX]` pull, `[YAW]` FIX-epoch drift, stamp probe.
+- Manual: measure the RoboSense ↔ VRTK2 lever arm (FE estimate ≈ (−0.25, +0.04, −0.02) m).
