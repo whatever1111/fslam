@@ -48,7 +48,31 @@ fast_lio_pgo:
     use_gps: true
     use_gps_elevation: true         # 关键：约束 Z 漂移 | critical: constrains Z drift
     gps_cov_threshold: 5.0          # 方差超此值直接拒收 | reject GPS with variance above this
+    # 实时重固定诊断（不用录包）：门内 GPS 断流 ≥ min_gap 秒后第一条门内样本 = 重固定事件，
+    # 到达 addGPSFactor 时打 [REFIX] pull2D/along/cross（估计 vs 该 FIX 的先验残差），
+    # settle 秒后再打一条 settled。0 关闭。
+    # Live re-fix diagnostics (no recording needed): the first admitted GPS sample after
+    # >= min_gap s without one is a re-fix event; [REFIX] logs the pre-fit residual of the
+    # estimate vs that FIX (pull2D, along/cross in the estimate heading), and again once
+    # settled. Same quantity as evaluate_pgo's fix-recovery pull. min_gap 0 disables.
+    refix_log_min_gap_sec: 10.0
+    refix_log_settle_sec: 5.0
     gps_add_interval: 0.5           # m，相邻 GPS 因子间距 | meters between GPS factors
+
+    # ---- FE Z 漂移回灌（TEM 图侧锚定用，实验特性默认 OFF）----
+    # ---- FE Z-drift feedback (for the front-end TEM's graph anchoring; EXPERIMENTAL, default OFF) ----
+    # 图是唯一知道"前端 Z 漂了多少"的一方（优化后 kf Z − 原始 kf Z，GPS 钉住）。低通后按
+    # kf 节奏发 /lio_slam/fe_z_drift，仅在 GPS 因子新鲜时发布（降级段图跟随前端，估计陈旧
+    # 即停发，前端自动退回 egf 自门控学习）。消费端见 fast_lio.base.yaml 的 tem_anchor_*。
+    # ⚠ 注入权限已按实测剂量响应钉死在 safe-neutral 档，勿在前端侧加码（B3 换通道全家史）。
+    # The graph alone knows how far the front-end Z drifted (optimized-vs-raw kf Z, GPS-pinned).
+    # Low-passed, published at kf cadence, ONLY while an accepted GPS factor is fresh. Consumer
+    # knobs: tem_anchor_* in fast_lio.base.yaml. Injection authority is pinned safe-neutral per
+    # the measured dose-response — do not raise it on the front-end side.
+    terrain_drift_pub_en: false
+    terrain_drift_gps_fresh_sec: 5.0
+    terrain_drift_lp_tau: 5.0
+    terrain_drift_sigma: 0.2
 
     # ---- 退化 RTK 处理（cov 驱动，protective 默认 ON） ----
     # ---- Degraded-RTK handling (covariance-driven, protective default ON) ----
@@ -65,6 +89,29 @@ fast_lio_pgo:
     gps_var_scale_degraded: 10.0
     gps_degraded_max_residual: 3.0  # 信任域：残差超此则回退全权重 GPS（前端退化场景兜底）| trust region
     gps_add_max_wait_sec: 2.0       # 停车时距离门的时间旁路 | stationary bypass for the distance gate
+
+    # ---- 退化 GNSS 偏置链（bias-augmented degraded factors,默认 OFF）----
+    # ---- Degraded-GNSS bias chain (bias-augmented degraded factors; default OFF) ----
+    # 退化解(SPP/float/INS 航位推算)的误差是缓变偏置而非白噪声:绝对因子会把图拖到偏置上
+    # (m20 室内段:重固定时沿轨 −2 m/横轨 +1.25 m),×10 膨胀又几乎无用。开启后每个退化样本
+    # 绑到偏置节点 G(k)(EnuAlignmentBiasFactor,e = X.t − T_ec·p − G),按未膨胀的桶 σ 入图;
+    # 段首节点零均值先验 σ_prior(有限 → 前端跑飞仍有轻度收容),每 segment_m 新节点用
+    # σ_walk 随机游走相连;FIX 样本直连(无偏置),链在重固定处自然结束。含 clamp/收敛尾优先级不变。
+    # A degraded solution carries a slowly varying bias, not white noise: an absolute factor drags
+    # the graph onto it, a ×10 inflated one is useless. With the chain on, each degraded sample
+    # binds to a bias node G(k) at its honest bucket σ; the first node of a stretch gets a zero-mean
+    # prior σ_prior (finite → light containment), successive nodes every segment_m are linked by a
+    # σ_walk random walk; FIX samples stay direct. Containment clamp / reconvergence tail keep precedence.
+    gps_degraded_bias_enable: false
+    gps_degraded_bias_prior_sigma_m: 1.5
+    gps_degraded_bias_walk_sigma_m: 0.3
+    gps_degraded_bias_segment_m: 10.0
+    gps_degraded_bias_add_interval_m: 2.0
+    gps_degraded_bias_jump_residual_m: 3.0    # 偏置修正后残差超此 → 视为退化解跳变,新节点+新先验(软收容)| bias-corrected residual jump → re-seed
+    gps_degraded_bias_clamp_residual_m: 10.0  # 链开启时的硬收容阈值(真跑飞)| hard containment while the chain is on
+    gps_degraded_bias_z_sigma_m: 0.01         # 偏置只在水平面;Z 钉零让 GPS-Z 继续压前端 Z 漂 | horizontal bias only; GPS-Z keeps masking FE Z drift
+    gps_degraded_bias_max_reseeds: 2          # 一段内重播种超此 → 升级回旧退化路径(clamp)| repeated jumps → escalate to legacy containment
+    gps_degraded_bias_escalate_hold_m: 200.0  # 升级后保持旧路径的行程(跨 FIX 闪烁)| stay escalated for this travel, across FIX flickers
 
     # ---- RTK 重收敛滑移闸（P0-2） | RTK reconvergence slide gate ----
     # GPS 位置在滑移而 INS twist 报告近零运动 → 样本处于滑移中途，跳过。
@@ -351,6 +398,31 @@ fast_lio_pgo_fusion:
     output_pacing_max_speed: 1.5           # m/s，修正分量的最大输出斜率 | correction slew rate
     output_pacing_snap_offset: 20.0        # m，pending 超此=重定位级，直接跳 | above this = relocalization, snap
     output_pacing_max_gap_sec: 1.0         # s，输出断流超此重置连续性 | output gap above this resets continuity
+    # 斜坡型修正（FE 长期漂移/stop-glide 跑飞，图持续纠正）会每 tick 重填 pending——恒速衰减
+    # 被无限跑赢、pending 棘轮到 snap（实测把 1-3m 无 pace 锯齿放大 ~6× 到 20.9m）。三道逃生：
+    # (a) 比例衰减：速率 ≥ pending/escape_tau，任何有限速率斜坡跑不赢，pending 封顶在 漂移率×τ；
+    #     代价=大幅往返摆动泄漏 幅度/τ 而非 max_speed。(b) 静止旁路：pacing 保护的是在跟踪的
+    #     控制器，停车时不需要——车速取 PGO 关键帧位移率（GPS 钉住的图侧；不能用 FE 或融合
+    #     target 自身运动，后者在关键帧间跟随 FE），新鲜注记 < stationary_speed ⇒ max_speed
+    #     ×boost；注记断流/过期=视为运动（保守）。(c) 跑飞逃生：修正率 1s-EMA 持续 > runaway_rate
+    #     达 hold 秒且 pending > floor ⇒ FE 跑飞、精度优先，以 pending/drain_tau 排空（健康修正
+    #     是脉冲型撑不满 hold——9 段录制回放零误触发；五个 0702 事件 realization 20.9/21.3m 最坏
+    #     → 全部 ≤3.7m，实跑 3.62m@FE 107m 跑飞）。
+    # Ramp-type corrections (secular FE drift) refill the pending every tick and outrun a
+    # constant-rate decay (measured ~6x amplification to 20.9m). Three escapes: (a) proportional
+    # decay rate >= pending/escape_tau; (b) stationary boost keyed off the PGO keyframe
+    # displacement rate (graph-side; never the FE or the fused target's own motion);
+    # (c) runaway escape — sustained EMA'd correction rate + large pending = FE runaway,
+    # accuracy beats continuity (zero false triggers over 9 recorded replays; the five recorded
+    # 0702 event realizations all land <= 3.7m vs 20.9m legacy).
+    output_pacing_escape_tau: 2.5          # s，比例衰减时间常数（<=0 关）| proportional decay tau (<=0 off)
+    output_pacing_stationary_speed: 0.3    # m/s，图侧车速低于此=静止 | graph-side speed below this = parked
+    output_pacing_stationary_boost: 8.0    # 静止时 max_speed 倍率（<=1 关）| max_speed multiplier while parked (<=1 off)
+    output_pacing_speed_max_age: 2.0       # s，速度注记超龄=视为运动 | older speed notes mean "assume moving"
+    output_pacing_runaway_rate: 1.5        # m/s，持续修正率阈值（=max_speed：base 服务不了即跑飞；<=0 关）| sustained corr-rate threshold (<=0 off)
+    output_pacing_runaway_hold_sec: 1.5    # s，修正率须持续超阈值时长 | rate must stay above threshold this long
+    output_pacing_runaway_floor: 2.0       # m，触发所需 pending（0.25× 解除）| pending needed to engage (0.25x to clear)
+    output_pacing_runaway_drain_tau: 0.3   # s，触发后排空时间常数 | drain tau while engaged
 
     # ---- high_rate base_link 锚定算法默认值（仅 high_rate_odom=true 生效）----
     # ---- high_rate base_link anchoring defaults (active only when high_rate_odom=true) ----

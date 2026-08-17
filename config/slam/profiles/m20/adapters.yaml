@@ -46,6 +46,17 @@ lidar_adapter:
     output_frame: base_link
     min_range: 0.3            # fslam mower.yaml blind: 0.3
     max_range: 100.0
+    # OEM 驱动的 header.stamp 会在流中途切换语义：一段是首点时间，一段是"末点+13 ms"
+    # （0814 bag 22% 的帧、0813 16%，每 bag 7 次切换）。后者让前端把整帧当成晚了 113 ms，
+    # 与 IMU 错位 → 原地转弯（30–70°/s）时每帧几度的偏航拉扯，是 m20 偏航漂移/逐次散差的根因。
+    # 点时间戳是绝对时间且两种模式下都对，所以扫描时间戳直接取最早点。
+    # The OEM driver flips header.stamp semantics mid-stream: first-point time in some
+    # stretches, end-of-scan+13 ms in others (22% of frames in the 0814 bag, 16% in 0813,
+    # 7 flips per bag). The latter makes the FE treat the whole scan as 113 ms late vs the
+    # IMU → per-scan yaw fights of several degrees in the 30–70°/s in-place turns — the
+    # root of the m20 yaw drift / run-to-run scatter. The per-point timestamps are absolute
+    # and correct in both modes, so the scan stamp is taken from the earliest point.
+    stamp_from_points: true
 
 odom_adapter:
   ros__parameters:
@@ -61,16 +72,79 @@ odom_adapter:
     trusted_z_std: 0.04
     degraded_xy_std: 1.0
     degraded_z_std: 2.0
-    # Native-covariance passthrough stays OFF (default) until this rig's RTK
-    # duty cycle is characterized — degraded-stretch rigs do better on buckets.
+    # Native-covariance passthrough stays OFF (default). Characterized 2026-08-15
+    # on fslam_inputs_20260814_173246 (residual vs median of 3 fused runs, per
+    # gnss1_status; ratio = actual p68 / reported σ): 8 → 0.93, 7 → 0.89,
+    # 5 → 0.79, 1 (no-fix dead-reckoning) → 1.45 (receiver lies); Z reported
+    # 6-15x pessimistic in degraded states. VRTK2's XY σ is roughly honest, but
+    # thin data (one bag) — buckets stay the contract; degraded_xy_std 1.0 sits at
+    # the measured p68-p95 of status 5/7 (0.44-0.94 m).
+    # Re-fix transient (same bag): FIX samples 0-2 s after regaining fix are
+    # p95 0.91 m off, 2-5 s p68 0.31 m, ≥5 s 5 cm — while reported σ is FIX-grade
+    # throughout. Adapter-side inflation for the first 5 s after re-fix
+    # (transition_inflate_seconds 5 / std ×10) was A/B'd 2026-08-15 (3× each,
+    # healthy-FE runs only): /odom-vs-FIX p50 in the first 5 s 0.23-0.33 m vs
+    # 0.11-0.24 without, 5-15 s no difference, clean bag 4.1 → 7.5 cm mean with a
+    # 62 cm end offset (a status flicker arms the window). The SLAM drift to be
+    # corrected at re-fix (1.6-2.1 m) dwarfs the receiver transient (0.3 m), so
+    # delaying the correction only costs. Left OFF.
+    transition_inflate_seconds: 0.0
+    # Native-σ passthrough A/B (2026-08-17, fixed FE, 2× each): per-status honesty factors
+    # (7 ×1: ratio 0.83; 5/1 ×3.5: ratios 3.2/3.7), PGO cov gate 1.0, var_scale 1 — dense,
+    # sparse and bias-chain shapes ALL worse at the re-fix instant (0.24-1.39 vs 0.50 all-reject):
+    # the float solution is 0.4 m behind and 0.5-0.7 m off cross-track, the FE's whole-outage
+    # drift is 0.5 m along, so any degraded factor only imports the receiver's bias. Knobs kept
+    # (`use_native_covariance` + `native_scale_status/native_scale_std_factor`) for longer outages
+    # / degenerate-FE scenes; m20 stays all-reject.
+    # Outage containment A/B (2026-08-15, 3x degrade bag, cpuset 0-3): rejecting
+    # status 0/1 (INS-only dead-reckoning; huge σ → no PGO factor) gave mean
+    # 0.28/0.31/0.31 vs 0.29/0.28/0.26 ingesting them as the degraded bucket
+    # (pull 1.6-2.7 vs 2.4-2.9, noisy). The status-1 stretches (7.7 s + 16.9 s in
+    # the 82 s outage) still carry SPP-anchored INS positions worth σ≈3 m every
+    # 10 m — keep ingesting. Knob kept for rigs whose no-fix output is garbage;
+    # opt in with e.g. `rejected_status: [0, 1]` (NOTE: an empty list is not a valid
+    # launch parameter value — leave the key absent to disable).
 
 twist_adapter:
   ros__parameters:
-    # No wheel-speed ROS topic on the M20 (wheel data goes into the FP device via
-    # the driver's converter). Derive a longitudinal proxy from GNSS ENU velocity
-    # so /lio/twist exists; it is NOT fused (use_twist_odom=false in pgo.yaml).
+    # 无轮速 ROS 话题(轮速经驱动转换器进 FP 设备)→ 用 GNSS ENU 速度做纵向代理,保证
+    # /lio/twist 存在;不融合(pgo.yaml use_twist_odom=false)。
+    # No wheel-speed ROS topic (wheel data goes into the FP device via the driver's
+    # converter). Derive a longitudinal proxy from GNSS ENU velocity so /lio/twist
+    # exists; it is NOT fused (use_twist_odom=false in pgo.yaml).
     driver: gnss_proxy
     input_topic: /lio/gps_odom
     output_topic: /lio/twist
     output_frame: base_link
     enforce_nhc: true
+    # ---- 腿式里程计备选(已标定,默认不用)| leg-odometry alternative (calibrated, OFF) ----
+    # fslam host/motion_info_to_twist.py 把 OEM /MOTION_INFO(drdds,20 Hz,header stamp 恒 0)
+    # 转成无戳 geometry_msgs/Twist(linear.x = data.vel_x 机体前向速度)。08-15 两条实录对 RTK
+    # 地速标定:零滞后相关 0.94-0.97,快走时腿速偏低 ×1.06-1.09(慢走 ≈1.0,步态相关),
+    # 残差 p50 0.04 / p95 0.2 m/s,vel_y ≈ 0。前端融合(fast_lio.yaml wheel_odom_en)A/B
+    # 3× 退化包:换手拉回 2.1-3.5 m vs 基线 1.6-3.2 m、mean 0.26-0.30 vs 0.25-0.29、5s 空洞
+    # 0.233 vs 空洞守卫单独 0.205 → 无可测收益(78 s 拒止段任何 0.03 m/s 腿速偏差都积成
+    # 2 m,且沿航向误差主要是航向而非速度)。保留接口,需要时:
+    # fslam's host/motion_info_to_twist.py converts OEM /MOTION_INFO (drdds, 20 Hz,
+    # header stamp always 0) to a stampless geometry_msgs/Twist (linear.x =
+    # data.vel_x, body forward speed). Calibrated 08-15 vs RTK ground speed on both
+    # bags: zero-lag corr 0.94-0.97, legs under-report x1.06-1.09 at a fast walk
+    # (≈1.0 slow — gait dependent), residual p50 0.04 / p95 0.2 m/s, vel_y ≈ 0.
+    # Front-end fusion (fast_lio.yaml wheel_odom_en) A/B, 3x degrade bag: re-fix pull
+    # 2.1-3.5 m vs baseline 1.6-3.2, mean 0.26-0.30 vs 0.25-0.29, 5 s holes 0.233 vs
+    # hole-guard alone 0.205 → no measurable gain. Re-run 08-15 with the RTK-calibrated
+    # scale (wheel_speed_scale 1.09, cpuset 0-3): mean 0.29/0.29/0.24 vs base
+    # 0.29/0.28/0.26, re-fix pull 2.5/2.7/2.0 vs 2.5/2.9/2.4 — still flat. Root cause
+    # (path-length audit vs GPS): the leg speed is not a fixed scale, it is terrain
+    # dependent — ∫vx runs -10% short outdoors and -19% short inside the indoor
+    # (building, slow, turn-heavy) outage, i.e. it loses accuracy exactly where the
+    # FE under-travels (-7.6% path in the outage, +0.2% outdoors). Not a usable scale
+    # reference without a slip model. Contract kept; to enable:
+    #   driver: raw_twist
+    #   input_topic: /fixposition/motion_info_twist
+    #   speed_scale: 1.0
+    #   + fast_lio.yaml wheel_odom_en: true (wheel_vel_noise_vx 0.3, wheel_speed_scale 1.09)
+    # Stamped source: /MOTION_INFO's header is all zeros, but the DDS source_timestamp
+    # is an exact 50.000 ms tick with 0.46 ms latency (measured on 106) — the C++
+    # sidecar design (fslam TODO.md leg_odom_bridge) publishes TwistStamped from it;
+    # consume via driver: twist_stamped when it exists.

@@ -19,6 +19,30 @@ fast_lio_pgo:
     # /lio/twist is only a GNSS longitudinal proxy (no wheel-speed ROS topic) → not fused.
     use_twist_odom: false
 
+    # 退化 GPS 权重 A/B(2026-08-15,3× 退化包,cpuset 0-3):gps_var_scale_degraded 10 → 2
+    # (SPP/float 因子 σ 3.16 → 1.41 m):mean 0.261/0.265/0.265 vs 0.290/0.279/0.260,
+    # 但 max 2.10/2.36/2.15 vs 1.73/1.81/1.69,换手拉回 2.1/1.7/2.9 vs 2.5/2.9/2.4 —— 均值
+    # 略好、峰值明显差(SPP 偏置被拉进图)。保留 base 的 10。室内段前端少走 7.6%(近墙欠行),
+    # 现有退化因子已把融合输出拉回到 −1.9%。
+    # Degraded-GPS weight A/B (3x degrade bag): var scale 10 → 2 trades a slightly better
+    # mean for a clearly worse max (SPP bias pulled into the graph) — keep base 10.
+
+    # 室内拒止段(m20_0814_degrade,建筑物内)不吃退化桶 GPS 因子(2026-08-16 定案):
+    # odom_adapter 退化桶 σ=1.0 → var 1.0 > 0.5 被拒;FIX 桶 (0.02²) 照常。3× 退化包:换手拉回
+    # 1.66/1.93/1.57 vs 基线 2.49/2.87/2.39(沿轨 −1.4 vs −2.05 m,横轨 +0.4 vs +1.25),mean
+    # 0.25-0.26 vs 0.26-0.29,max 不变;干净包 3.7 cm 不变。机理:FP 自身拒止解(SPP/float +
+    # 未标定腿速轮速)在重固定瞬间落后 ~1 m、偏 ~1 m,退化因子把图拖向它;前端本身
+    # 对齐后误差仅 ±1 m 量级;沿行进轴可观性指标室内 0.42 ≈ 室外 0.39,不是退化。
+    # Indoor outage: reject the degraded-bucket GPS factors entirely (2026-08-16). The
+    # adapter's degraded σ=1.0 → var 1.0 > 0.5 is skipped; FIX (0.02²) still enters. 3x
+    # degrade bag: re-fix pull 1.66/1.93/1.57 vs 2.49/2.87/2.39 m (along −1.4 vs −2.05,
+    # cross +0.4 vs +1.25), mean 0.25-0.26 vs 0.26-0.29, max unchanged; clean bag 3.7 cm
+    # unchanged. Mechanism: the FP's own outage solution (SPP/float + uncalibrated leg
+    # wheelspeed) is ~1 m behind and ~1 m sideways at re-fix and the degraded factors drag
+    # the graph to it; the raw FE is within ~±1 m; along-track observability indoors 0.42
+    # ≈ outdoors 0.39 (not corridor degeneracy).
+    gps_cov_threshold: 0.5
+
 fast_lio_pgo_fusion:
   ros__parameters:
     base_frame: "base_link"
