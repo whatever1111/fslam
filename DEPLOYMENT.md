@@ -13,8 +13,8 @@ form where possible:
 
 | | native | docker |
 |---|---|---|
-| **`rtk_only`**(VRTK2 RTK/INS:fork 驱动直接交付三话题 the forked `whatever1111/fixposition_driver` delivers the contract itself)| §1/§2:`run_rtk_only_native.sh` — **线上 live**(2026-08-08 起)| §3:release 镜像一行命令 — 已在 106 验证 validated |
-| **`fslam`**(SLAM:LIO-SLAM 容器,内用**上游原版** fixposition 驱动 the container's internal **upstream** driver;`SLAM_IMAGE` 钉版)| —(SLAM 按设计容器化 containerized by design)| §3.4:`run_fslam.sh` — 工具链就绪 toolchain ready |
+| **`rtk_only`**(VRTK2 RTK/INS:fork 驱动直接交付三话题 the forked `whatever1111/fixposition_driver` delivers the contract itself)| §1:`run_rtk_only_native.sh`,release 包 — **线上 live**(2026-08-08 起)| §3:release 镜像一行命令 — 已在 106 验证 validated |
+| **`fslam`**(SLAM:LIO-SLAM,上游原版 fixposition 驱动只出 FPA 流 upstream driver, FPA streams only)| §3.4b:`run_fslam_native.sh`,LIO-SLAM `foxy-v*` release 包(`SLAM_NATIVE_RELEASE` 钉版)— 106 已装 foxy-v1.0.3,遛狗验证中 installed on 106, in drive testing | §3.4:`run_fslam.sh`(`SLAM_IMAGE` 钉版)— 工具链就绪,雷达受 loopback 墙限制 toolchain ready, lidar behind the loopback wall |
 
 只想跑裸驱动、自己给配置:看 fork 驱动仓库的 `DEPLOYMENT.md`。
 For the bare driver with your own configuration, see `DEPLOYMENT.md` in the driver fork.
@@ -42,7 +42,7 @@ On a fresh M20 we install **3 services of our own + 2 drop-ins**, and disable 1 
 | — | `systemctl disable --now localization` | 禁用 OEM 原厂定位(否则两个 `/ODOM` 打架)disable the OEM localization |
 
 **前置条件 | prerequisites:**
-- 驱动二进制:release 包 `rtk_only_<ver>_foxy_arm64.tar.gz` 解到工作区(§1),或狗上编译(§2)
+- 驱动二进制:release 包 `rtk_only_<ver>_foxy_arm64.tar.gz` 解到工作区(§1)。**狗上不再编译**(release 二进制唯一来源)。
 - 本仓库工作副本在 `/home/user/fslam`(unit 路径写死了它)
 - **时钟链已就位**:`chronyc tracking` 显示 `PHC0` + `Leap status: Normal` —— 即 VRTK2→ptp4l(eth1)
   →chrony 的链(见 §3.6 注)。新狗没有这条链先配时钟,再部署定位。
@@ -136,28 +136,13 @@ sudo systemctl daemon-reload && sudo systemctl enable --now rtk_only
 
 ---
 
-## 2. rtk_only · native — 狗上编译(现行线上形态)| Build on the robot (the current live setup)
+## 2. 狗上编译 —— 已下线 | Building on the robot — retired
 
-线上就是这条:源码在 `/home/user/m20_src`(驱动 `m20-foxy` 分支),工作区 `/home/user/m20_ws`,
-仓库工作副本 `/home/user/fslam`。
-This is what's running now: sources at `/home/user/m20_src` (driver branch `m20-foxy`), workspace
-`/home/user/m20_ws`, repo working copy `/home/user/fslam`.
-
-```bash
-# 源码整棵送过去(含 fixposition-sdk 子模块)| ship the whole tree, submodule included
-#   tar czf - . | ssh <robot> 'mkdir -p /home/user/m20_src && tar xzf - -C /home/user/m20_src'
-
-# 编译钉在 2 个核上,别把狗跑满 | pin the build to 2 cores; never saturate the robot
-BUILD_CPUS=2,3 BUILD_JOBS=2 tools/build_rtk_only_native.sh --source /home/user/m20_src
-
-sudo cp systemd/rtk_only.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now rtk_only
-```
-
-> 源码同步务必**整棵覆盖**,别一个文件一个文件挑。曾经因为漏同步一个 `.cpp` 而头文件里还留着声明,
-> 直接编出 `undefined reference`。
-> Always sync the **whole tree** rather than picking files: a missed `.cpp` once left a declaration
-> in the header with no definition and produced an `undefined reference`.
+驱动和 SLAM 都只从 release 二进制部署(§1 / §3.4b)。狗上没有公网、CPU 只有 4 核、重编译会饿死 sshd,
+`tools/build_rtk_only_native.sh` 只留给开发机上的应急重现,不再是任何部署路径的一部分。
+Both the driver and the SLAM stack are deployed from release binaries only (§1 / §3.4b). The robot has
+no internet and four cores; a rebuild starves sshd. `tools/build_rtk_only_native.sh` remains for
+emergency reproduction on a dev box and is no longer part of any deployment path.
 
 ---
 
@@ -334,50 +319,127 @@ sudo systemctl daemon-reload && sudo systemctl enable --now fslam
 
 ---
 
-## 3.4b fslam · native — 原生 Foxy(无容器、无中继)| fslam native on Foxy (no container, no relay)
+## 3.4b fslam · native — 发布包(免编译)| fslam native on Foxy — release bundle (no compile)
 
-组成 | what runs:**LIO-SLAM 原生二进制**(`SLAM_NATIVE_RELEASE` 钉版的 `foxy-v*` release tarball:
-FAST-LIO + PGO + 融合 + canonical 适配器,全部原生 Foxy 进程)+ **驱动 fork 的上游节点**(与 rtk_only
-共用 `/home/user/m20_ws` 安装,但跑的是无 m20 包装的 `fixposition_driver_ros2_exec`,fslam 配置,只出
-FPA 流不出 `/ODOM`)+ **同一套宿主机胶水**。原生 Foxy(Fast DDS 2.0)直接收 OEM 的 loopback-only
-点云 —— 这是 fslam 摆脱 Humble 容器 + 中继链路的形态。
-The **LIO-SLAM native binaries** (the `foxy-v*` release tarball pinned by `SLAM_NATIVE_RELEASE`) +
-the **driver fork's upstream node** (same `/home/user/m20_ws` install as rtk_only, but running plain
-`fixposition_driver_ros2_exec` with the fslam config — FPA streams only, no `/ODOM`) + the **same host
-glue**. Native Foxy (Fast DDS 2.0) receives the OEM's loopback-only cloud directly — no relay.
+组成 | what runs:**LIO-SLAM 原生二进制**(`SLAM_NATIVE_RELEASE` 钉版的 LIO-SLAM `foxy-v*` release
+tarball:FAST-LIO + PGO + 融合 + canonical 适配器,全部原生 Foxy 进程)+ **驱动 fork 的上游节点**
+(与 rtk_only 共用 `/home/user/m20_ws` 安装,但跑的是无 m20 包装的 `fixposition_driver_ros2_exec`,
+fslam 配置,只出 FPA 流不出 `/ODOM`)+ **同一套宿主机胶水**。原生 Foxy(Fast DDS 2.0)直接收 OEM 的
+loopback-only 点云 —— 这是 fslam 摆脱 Humble 容器 + 中继链路的形态。
+The **LIO-SLAM native binaries** (the LIO-SLAM `foxy-v*` release tarball pinned by
+`SLAM_NATIVE_RELEASE`) + the **driver fork's upstream node** (same `/home/user/m20_ws` install as
+rtk_only, but running plain `fixposition_driver_ros2_exec` with the fslam config — FPA streams only, no
+`/ODOM`) + the **same host glue**. Native Foxy (Fast DDS 2.0) receives the OEM's loopback-only cloud
+directly — no relay.
 
-**包获取 | getting the bundle:** LIO-SLAM 仓库(私有)的 `foxy-v*` release 附带
-`lio-slam_<ver>_foxy_arm64.tar.gz`;狗没有公网,从有权限的机器搬:
-The private LIO-SLAM repo's `foxy-v*` releases carry the tarball; ship it from a machine with access:
+**现状 | current state(2026-08-18):** 106 上装的是 `foxy-v1.0.3`(`/home/user/lio-slam`,上一版留在
+`/home/user/lio-slam-1.0.2.bak`),**线上服务仍是 `rtk_only`**;fslam · native 按需手工拉起(§3.4b-3 的
+遛狗验证),尚未切成开机服务。
+On 106 the bundle is `foxy-v1.0.3` (`/home/user/lio-slam`, previous kept as `lio-slam-1.0.2.bak`);
+**the live service is still `rtk_only`**; fslam · native is started by hand for drive tests and is not
+yet the boot service.
+
+### 3.4b-1 取包与安装 | Get and install the bundle
+
+LIO-SLAM 仓库(私有)的 `foxy-v*` release 附带 `lio-slam_<ver>_foxy_arm64.tar.gz` + `.sha256`
+(CI `build-foxy-arm64.yml` 在 arm64 runner 上打包)。狗没有公网,从有权限的机器经跳板搬过去:
+The private LIO-SLAM repo's `foxy-v*` releases carry the tarball + `.sha256` (CI
+`build-foxy-arm64.yml` on the arm64 runner). Ship it through the jump host:
 
 ```bash
-tar -xzf lio-slam_<ver>_foxy_arm64.tar.gz     # 得到 lio-slam/ | yields lio-slam/
-scp -r lio-slam robot:/home/user/             # 路径可换,--slam-dir 指过去即可
-ssh robot 'source /home/user/lio-slam/env.sh && echo OK'   # 自检 | sanity
+# 开发机 | dev box
+sha256sum -c lio-slam_<ver>_foxy_arm64.tar.gz.sha256
+scp lio-slam_<ver>_foxy_arm64.tar.gz <jump>:/tmp/ && ssh <jump> 'scp /tmp/lio-slam_<ver>_foxy_arm64.tar.gz root@<robot>:/tmp/'
+
+# 狗上,root | on the robot, as root
+cd /home/user
+sha256sum /tmp/lio-slam_<ver>_foxy_arm64.tar.gz            # 与 .sha256 一致 | must match
+[ -d lio-slam ] && mv lio-slam lio-slam-<old>.bak            # 留上一版做回滚 | keep the previous for rollback
+tar -xzf /tmp/lio-slam_<ver>_foxy_arm64.tar.gz -C /home/user # 得到 lio-slam/ | yields lio-slam/
+chown -R user:user lio-slam
+source /home/user/lio-slam/env.sh && echo OK                 # 自检 | sanity
+echo foxy-v<ver> > /home/user/fslam/SLAM_NATIVE_RELEASE      # 狗上工作副本没有网,钉版手改 | pin by hand (no git on the robot)
 ```
 
-**启动 | start:**
+同一版本在仓库叶子分支上也要钉(§7):`echo foxy-v<ver> > SLAM_NATIVE_RELEASE && git commit && git push`。
+Pin the same version on the leaf branch too (§7).
+
+**每台狗要改的值 | per-robot values:** 同 rtk_only(§0.5):VRTK stream 地址在
+`--fp-stream`/驱动配置里,雷达话题 `--lidar-topic`(106 固件是 `/LIDAR/POINTS`,别信 `/LIDAR/POINTS2`)。
+Same as rtk_only (§0.5): the VRTK stream (`--fp-stream` / driver config) and the lidar topic
+(`--lidar-topic`; the 106 firmware publishes `/LIDAR/POINTS`, not `/LIDAR/POINTS2`).
+
+### 3.4b-2 先手动跑一次(rtk_only 在线也能跑)| Run it by hand first (safe next to a live rtk_only)
 
 ```bash
-./run_fslam_native.sh                # 驱动 + 管线 + 胶水,全后台(pid 文件)
-./run_fslam_native.sh --check        # 逐话题链路体检 | per-topic pipeline check
-./run_fslam_native.sh --stop         # 整组停止 | stop everything
+cd /home/user/fslam
+# 不起第二个 FP 驱动(吃 rtk_only 已发的 FPA 流),直出话题改名,/ODOM 仍只有 rtk_only 一个 publisher
+# no second FP driver (consumes rtk_only's FPA streams); odom on a scratch topic → /ODOM keeps one owner
+sudo ./run_fslam_native.sh --no-fixposition --odom-topic /lio_verify_odom
+sudo ./run_fslam_native.sh --check          # 逐话题测频 | per-topic rate check
+tail -f logs/fslam_native/pipeline_run/pipeline.log   # clouds in=/out=、FE 时延、[REFIX]
+sudo ./run_fslam_native.sh --stop
 ```
 
-常用选项:`--slam-dir`(默认 `/home/user/lio-slam`)、`--driver-ws`(默认 `/home/user/m20_ws`)、
-`--profile`(默认 m20)、`--lidar-topic`(默认 `/LIDAR/POINTS2` —— 当前固件话题,直吃无中继)、
-`--fp-stream <uri>`、`--odom-topic`;完整列表见脚本头。
-Common options: `--slam-dir`, `--driver-ws`, `--profile` (default m20), `--lidar-topic`
-(default `/LIDAR/POINTS2` — the current firmware topic, consumed directly), `--fp-stream`,
-`--odom-topic`; full list in the script header.
+健康的样子(106,静止,2026-08-18):`lidar_adapter: clouds in=1107 out=1106` @10 Hz、
+`SENSOR_TO_ODOM mean ≈ 70 ms`、PGO 关键帧在走、无 `header stamp is …` 告警。管线 + OEM 栈把 4 核狗顶到
+load ≈10,**别同时录包**(实测 load 15、FE 时延 2.3 s、丢帧)。
+Healthy (106 at rest, 2026-08-18): clouds in/out at 10 Hz, FE latency ≈70 ms, PGO keyframes running,
+no adapter stamp warnings. Pipeline + OEM stack put the 4-core robot at load ≈10 — **do not record at
+the same time** (measured: load 15, FE latency 2.3 s, dropped scans).
 
-**开机自启 | boot service:**
+### 3.4b-3 遛狗验证 | Drive test
+
+`tools/verify_drive.sh` 把该验的都放一起,结束给一页 `REPORT.txt`(§4 有预期值):
+`tools/verify_drive.sh` runs every open check together and prints one `REPORT.txt` (expected values in §4):
 
 ```bash
-sudo systemctl disable --now fslam rtk_only rtk_loc m20_loc m20_loc_foxy   # 都发 /ODOM
+sudo tools/verify_drive.sh                # 录包遛狗:录 + 雷达时戳模式探针(包拿回开发机评测)
+                                          # recording drive: record + lidar header-stamp probe
+sudo tools/verify_drive.sh --start-slam   # 实时遛狗(自动不录):[REFIX] 拉回 + [YAW] 漂移 + 时戳探针
+                                          # live drive (recording off): [REFIX] pull + [YAW] drift + stamp probe
+```
+
+`[REFIX]` 是管线自己打的日志:FIX 断 ≥10 s 后第一条门内 GPS 到达时的先验残差 `pull2D`(沿/横按估计航向),
+5 s 后再打一条 settled —— 与开发机 `evaluate_pgo` 的 fix-recovery pull 同一个量(0814 包 0.97 vs 0.945),
+不用录包就能读实时结果。
+`[REFIX]` is printed by the pipeline itself: the pre-fit residual `pull2D` (along/cross in the
+estimate heading) at the first admitted GPS after a ≥10 s FIX gap, plus a settled line 5 s later — the
+same quantity as `evaluate_pgo`'s fix-recovery pull, readable live without a recording.
+
+### 3.4b-4 切成开机服务 | Make it the boot service
+
+只有在 §3.4b-3 的实时遛狗过关后才切(所有定位服务互斥,§0):
+Only after the drive test passes (all localization services are mutually exclusive, §0):
+
+```bash
+sudo systemctl disable --now fslam rtk_only rtk_loc m20_loc m20_loc_foxy   # 都发 /ODOM | all publish /ODOM
 sudo cp systemd/fslam_native.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now fslam_native
 ```
+
+服务形态下不带 `--no-fixposition`:fslam_native 自己起驱动 fork 的上游节点(FPA 流)+ 管线直出 `/ODOM`。
+As a service it runs without `--no-fixposition`: it starts the driver fork's upstream node itself and
+the pipeline owns `/ODOM`.
+
+### 3.4b-5 验证与回滚 | Verify and roll back
+
+验证同 §4(`/ODOM` 恰好 1 个 publisher、`/LOCATION_STATUS` 2 Hz、`/LOC_BODY_POINTS` ≈9.5 Hz),外加
+`pipeline.log` 里 `clouds in≈out`、FE 时延 <100 ms、`[REFIX]` 数值合理。
+Verify as in §4 plus, in `pipeline.log`: clouds in≈out, FE latency <100 ms, sane `[REFIX]` values.
+
+```bash
+# 服务回滚 | service rollback
+sudo systemctl disable --now fslam_native && sudo systemctl enable --now rtk_only
+# 包回滚 | bundle rollback(上一版还在 .bak)
+cd /home/user && mv lio-slam lio-slam-<ver>.bad && mv lio-slam-<old>.bak lio-slam
+```
+
+`run_fslam_native.sh` 常用选项:`--slam-dir`(默认 `/home/user/lio-slam`)、`--driver-ws`(默认
+`/home/user/m20_ws`)、`--profile`(默认 m20)、`--lidar-topic`(默认 `/LIDAR/POINTS`)、`--fp-stream <uri>`、
+`--odom-topic`、`--param-overlay`;完整列表见脚本头。
+Common options: `--slam-dir`, `--driver-ws`, `--profile` (default m20), `--lidar-topic` (default
+`/LIDAR/POINTS`), `--fp-stream`, `--odom-topic`, `--param-overlay`; full list in the script header.
 
 ---
 
@@ -495,6 +557,8 @@ ros2 topic echo --qos-profile sensor_data /LOCATION_STATUS
 | `/LOC_BODY_POINTS` | ≈9.5 Hz,stamp 跟随最新 `/ODOM` |
 | `rsdriver` / `hsLidar` 重启数 restart counts | 部署前后不变 unchanged across the deploy |
 | `robot_state_publisher` | 活着 alive(和驱动一起发 `/tf_static`) |
+| fslam · native 附加 extra | `pipeline.log`:`clouds in≈out` @10 Hz,`SENSOR_TO_ODOM mean` <100 ms,无 `header stamp is` 告警;`[REFIX] pull2D` ≲0.6 m(0814 包基线 0.5–0.97) |
+| `tools/verify_drive.sh` 报告 report | `[LIDAR-STAMP]` mode A 0 %/flips 0;`[YAW]` FIX 段漂移 <2°/100 m;`[GUARD]` starved 0 |
 
 `/LOCATION_STATUS.total_status`:0=未初始化,1=正常,2=低质量,3=丢失。
 `total_status`: 0 uninitialized, 1 normal, 2 degraded, 3 lost.
@@ -508,6 +572,8 @@ Also, Foxy's `ros2 topic echo` has no `--once` or `--field`.
 ---
 
 ## 5. 回滚与旧名迁移 | Rollback and old-name migration
+
+fslam · native 回滚见 §3.4b-5(服务回 rtk_only,包回 `.bak`)。fslam native rollback: §3.4b-5.
 
 回滚(rtk_only 出问题时)| rollback when rtk_only misbehaves:
 
@@ -572,4 +638,7 @@ git commit -am "chore(deep-robotics-m20-foxy): pin driver foxy-v1.0.2"
 git tag deep-robotics-m20-foxy-v1.2.1 deep-robotics-m20-foxy
 git push origin deep-robotics-m20-foxy deep-robotics-m20-foxy-v1.2.1
 # 升级 SLAM 镜像同理改 SLAM_IMAGE | bump the SLAM image by editing SLAM_IMAGE likewise
+# 升级原生 SLAM 包:狗上装好(§3.4b-1)后改 SLAM_NATIVE_RELEASE | native SLAM bundle: after §3.4b-1, edit SLAM_NATIVE_RELEASE
+echo foxy-v1.0.3 > SLAM_NATIVE_RELEASE
+git commit -am "chore(deep-robotics-m20-foxy): pin LIO-SLAM native bundle foxy-v1.0.3"
 ```

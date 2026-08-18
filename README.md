@@ -59,7 +59,7 @@ DRIVER_RELEASE SLAM_IMAGE SLAM_NATIVE_RELEASE   各模式·形态的钉版 | per
 run_rtk_only_native.sh       rtk_only · native 启动器(线上 live)
 run_fslam.sh                 fslam · docker 启动器
 run_fslam_native.sh          fslam · native 启动器(LIO-SLAM 原生 tarball + fork 驱动上游节点)
-tools/build_rtk_only_native.sh  狗上编译 rtk_only 驱动 | build the driver on the robot
+tools/build_rtk_only_native.sh  （已下线，仅开发机应急重现；部署只用 release 二进制）| retired: dev-box emergency rebuild only, deployments use release binaries
 tools/build_m20_image.sh     旧 Humble 容器镜像构建(humble 叶子备用)| legacy Humble image build
 lib/deploy_common.sh         共享函数 | shared helpers
 container/                   fslam 容器载荷(只读挂载)| fslam container payloads (ro mounts)
